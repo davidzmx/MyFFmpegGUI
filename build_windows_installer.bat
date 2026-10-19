@@ -49,6 +49,25 @@ if not exist "dist\MyFFmpegGUI\MyFFmpegGUI.exe" (
     exit /b 1
 )
 
+:: 4.5 Buscar e incluir FFmpeg y FFprobe si estan en PATH
+if not exist "bin\ffmpeg.exe" (
+    where ffmpeg.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [*] Detectado ffmpeg.exe en PATH, copiando a bin\ para incluirlo...
+        mkdir bin 2>nul
+        for /f "delims=" %%F in ('where ffmpeg.exe') do copy /y "%%F" "bin\ffmpeg.exe" >nul & goto :found_ffmpeg
+    )
+    :found_ffmpeg
+)
+if not exist "bin\ffprobe.exe" (
+    where ffprobe.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        mkdir bin 2>nul
+        for /f "delims=" %%F in ('where ffprobe.exe') do copy /y "%%F" "bin\ffprobe.exe" >nul & goto :found_ffprobe
+    )
+    :found_ffprobe
+)
+
 echo [OK] Compilacion completada con exito en dist\MyFFmpegGUI\
 echo.
 

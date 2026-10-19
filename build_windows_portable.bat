@@ -53,7 +53,7 @@ if not exist "dist\MyFFmpegGUI\MyFFmpegGUI.exe" (
 :: Mover a carpeta portable
 rename "dist\MyFFmpegGUI" "MyFFmpegGUI_Portable"
 
-:: 5. Copiar FFmpeg y FFprobe si existen localmente
+:: 5. Copiar FFmpeg y FFprobe si existen localmente o en PATH
 mkdir "%PORTABLE_DIR%\bin" 2>nul
 if exist "bin\ffmpeg.exe" (
     echo [*] Copiando bin\ffmpeg.exe incluido...
@@ -62,15 +62,24 @@ if exist "bin\ffmpeg.exe" (
     echo [*] Copiando ffmpeg.exe...
     copy /y "ffmpeg.exe" "%PORTABLE_DIR%\bin\" >nul
 ) else (
-    echo [INFO] No se encontro ffmpeg.exe en la raiz o en bin\
-    echo        Para que sea 100%% autosuficiente, puedes colocar ffmpeg.exe y ffprobe.exe
-    echo        dentro de la carpeta: %PORTABLE_DIR%\bin\
+    where ffmpeg.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [*] Detectado ffmpeg.exe en PATH, copiando a version portable...
+        for /f "delims=" %%F in ('where ffmpeg.exe') do copy /y "%%F" "%PORTABLE_DIR%\bin\ffmpeg.exe" >nul & goto :found_port_ffmpeg
+    )
+    :found_port_ffmpeg
 )
 
 if exist "bin\ffprobe.exe" (
     copy /y "bin\ffprobe.exe" "%PORTABLE_DIR%\bin\" >nul
 ) else if exist "ffprobe.exe" (
     copy /y "ffprobe.exe" "%PORTABLE_DIR%\bin\" >nul
+) else (
+    where ffprobe.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        for /f "delims=" %%F in ('where ffprobe.exe') do copy /y "%%F" "%PORTABLE_DIR%\bin\ffprobe.exe" >nul & goto :found_port_ffprobe
+    )
+    :found_port_ffprobe
 )
 
 :: 6. Copiar archivos auxiliares

@@ -54,10 +54,25 @@ jobs:
                       --hidden-import "PyQt5.QtGui" `
                       main.py
 
+      - name: Descargar e integrar FFmpeg y FFprobe oficiales para Windows
+        shell: pwsh
+        run: |
+          choco install ffmpeg --no-progress -y
+          $ffmpeg = (Get-Command ffmpeg.exe).Source
+          $ffprobe = (Get-Command ffprobe.exe).Source
+          New-Item -ItemType Directory -Force -Path "bin"
+          Copy-Item $ffmpeg "bin\ffmpeg.exe"
+          Copy-Item $ffprobe "bin\ffprobe.exe"
+          Write-Host "FFmpeg copiado exitosamente desde $ffmpeg"
+          Write-Host "FFprobe copiado exitosamente desde $ffprobe"
+
       - name: Empaquetar Versión Portable (.zip)
         shell: pwsh
         run: |
           Copy-Item -Path "dist\MyFFmpegGUI" -Destination "dist\MyFFmpegGUI_Portable" -Recurse
+          New-Item -ItemType Directory -Force -Path "dist\MyFFmpegGUI_Portable\bin"
+          Copy-Item -Path "bin\ffmpeg.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "bin\ffprobe.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -ErrorAction SilentlyContinue
           Copy-Item -Path "README.md" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "instalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "desinstalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
