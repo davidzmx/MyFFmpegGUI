@@ -1,0 +1,57 @@
+# ==============================================================================
+# .gitignore para MyFFmpeg GUI
+# ==============================================================================
+
+# Byte-compiled / Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+
+# C extensions
+*.so
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Compilaciones y artefactos de distribución
+bin/
+build/
+dist/
+build_deb_pkg/
+Output/
+*.egg-info/
+*.egg
+*.deb
+*.rpm
+*.exe
+*.zip
+*.tar.gz
+*.AppImage
+*.spec
+
+# Archivos de configuración local y personal del usuario
+config.json
+
+# Archivos temporales y de logs
+*.log
+tmp/
+temp/
+.tempmediaStorage/
+.cache/
+.pytest_cache/
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db

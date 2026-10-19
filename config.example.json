@@ -1,0 +1,86 @@
+{
+    "ffmpeg_path": "",
+    "ffprobe_path": "",
+    "base_output_dir": "",
+    "auto_suggest_subfolders": true,
+    "default_save_location": "same_folder",
+    "context_menu_actions": [
+        {
+            "id": "quick_mp3",
+            "name": "⚡ Rápido: Convertir a MP3",
+            "type": "quick",
+            "command_template": "ffmpeg -y -i \"{input}\" \"{output_no_ext}.mp3\"",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "audio-x-generic"
+        },
+        {
+            "id": "quick_wav",
+            "name": "⚡ Rápido: Convertir a WAV",
+            "type": "quick",
+            "command_template": "ffmpeg -y -i \"{input}\" \"{output_no_ext}.wav\"",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "audio-x-generic"
+        },
+        {
+            "id": "quick_audio_copy",
+            "name": "⚡ Rápido: Extraer Audio Original (Stream Copy)",
+            "type": "quick",
+            "command_template": "ffmpeg -y -i \"{input}\" -vn -c:a copy \"{output_no_ext}_audio.m4a\"",
+            "enabled": false,
+            "is_custom": false,
+            "icon": "audio-x-generic"
+        },
+        {
+            "id": "gui_audio",
+            "name": "🎵 Abrir en Conversor de Audio (MP3 / WAV)",
+            "type": "gui",
+            "tab": "audio",
+            "command_template": "",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "audio-x-generic"
+        },
+        {
+            "id": "gui_video",
+            "name": "🎬 Abrir en Conversor de Video",
+            "type": "gui",
+            "tab": "video",
+            "command_template": "",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "video-x-generic"
+        },
+        {
+            "id": "gui_frames",
+            "name": "🎞️ Abrir en Extractor de Fotogramas",
+            "type": "gui",
+            "tab": "frames",
+            "command_template": "",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "image-x-generic"
+        },
+        {
+            "id": "gui_segment",
+            "name": "✂️ Abrir en Segmentar Video",
+            "type": "gui",
+            "tab": "segment",
+            "command_template": "",
+            "enabled": true,
+            "is_custom": false,
+            "icon": "edit-cut"
+        },
+        {
+            "id": "gui_main",
+            "name": "📂 Abrir en MyFFmpeg GUI",
+            "type": "gui",
+            "tab": null,
+            "command_template": "",
+            "enabled": false,
+            "is_custom": false,
+            "icon": "applications-multimedia"
+        }
+    ]
+}

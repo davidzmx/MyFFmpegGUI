@@ -1,0 +1,322 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Pestaña: Unir / Concatenar segmentos de video sin pérdida de calidad (Stream Copy)
+"""
+
+import os
+import tempfile
+from pathlib import Path
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
+    QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox
+)
+from PyQt5.QtCore import Qt
+from ui.widgets import FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget
+import ffmpeg_core
+import config_manager
+from ffmpeg_worker import FFmpegWorker
+
+
+class TabConcat(QWidget):
+    def __init__(self, get_ffmpeg_paths_fn, parent=None):
+        super().__init__(parent)
+        self.get_ffmpeg_paths = get_ffmpeg_paths_fn
+        self.worker = None
+        self.temp_list_file = None
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # 1. Lista interactiva de segmentos
+        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial)")
+        layout_list = QVBoxLayout(group_list)
+
+        self.list_widget = QListWidget(self)
+        self.list_widget.setAcceptDrops(True)
+        self.list_widget.setDragDropMode(QListWidget.InternalMove)
+        layout_list.addWidget(self.list_widget)
+
+        # Botones de gestión de lista
+        h_tools = QHBoxLayout()
+        btn_add_files = QPushButton("Añadir Archivos...")
+        btn_add_files.clicked.connect(self._add_files)
+
+        btn_add_folder = QPushButton("Añadir Carpeta...")
+        btn_add_folder.clicked.connect(self._add_folder)
+
+        btn_up = QPushButton("▲ Subir")
+        btn_up.clicked.connect(self._move_up)
+
+        btn_down = QPushButton("▼ Bajar")
+        btn_down.clicked.connect(self._move_down)
+
+        btn_remove = QPushButton("Eliminar")
+        btn_remove.clicked.connect(self._remove_selected)
+
+        btn_clear = QPushButton("Limpiar Todo")
+        btn_clear.clicked.connect(self._clear_list)
+
+        h_tools.addWidget(btn_add_files)
+        h_tools.addWidget(btn_add_folder)
+        h_tools.addWidget(btn_up)
+        h_tools.addWidget(btn_down)
+        h_tools.addWidget(btn_remove)
+        h_tools.addWidget(btn_clear)
+        layout_list.addLayout(h_tools)
+
+        self.lbl_count = QLabel("Total: 0 segmentos seleccionados")
+        self.lbl_count.setObjectName("lbl_meta")
+        layout_list.addWidget(self.lbl_count)
+
+        layout.addWidget(group_list)
+
+        # 2. Configuración de unión
+        group_opts = QGroupBox("2. Modo de Unión")
+        layout_opts = QVBoxLayout(group_opts)
+
+        h_mode = QHBoxLayout()
+        h_mode.addWidget(QLabel("Método:"))
+        self.combo_mode = QComboBox()
+        self.combo_mode.addItem(
+            "Concat Demuxer (Stream Copy - 100% Sin Pérdida de Calidad)", "copy"
+        )
+        self.combo_mode.addItem(
+            "Recodificación Inteligente (Para videos con diferente resolución o códec)", "reencode"
+        )
+        h_mode.addWidget(self.combo_mode, 1)
+        layout_opts.addLayout(h_mode)
+
+        lbl_note = QLabel(
+            "• Stream Copy une los archivos a la velocidad de lectura del disco sin alterar un solo píxel.\n"
+            "• Requiere que todos los segmentos provengan de la misma fuente o tengan códecs compatibles."
+        )
+        lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout_opts.addWidget(lbl_note)
+        layout.addWidget(group_opts)
+
+        # 3. Archivo Resultante
+        group_out = QGroupBox("3. Archivo Final Unificado")
+        layout_out = QVBoxLayout(group_out)
+
+        h_sub_opt = QHBoxLayout()
+        self.chk_use_base = QCheckBox("Guardar en Carpeta Base configurada")
+        self.chk_use_base.setChecked(True)
+        self.chk_use_base.stateChanged.connect(self._on_use_base_changed)
+
+        self.chk_subfolder = QCheckBox("Crear subcarpeta con el nombre del video unificado")
+        self.chk_subfolder.setChecked(config_manager.is_auto_suggest_subfolders())
+        self.chk_subfolder.stateChanged.connect(self._update_output_suggestion)
+
+        h_sub_opt.addWidget(self.chk_use_base)
+        h_sub_opt.addWidget(self.chk_subfolder)
+        h_sub_opt.addStretch()
+        layout_out.addLayout(h_sub_opt)
+
+        self.lbl_base_info = QLabel()
+        self.lbl_base_info.setStyleSheet("color: #38bdf8; font-size: 11px; padding: 2px 0px;")
+        layout_out.addWidget(self.lbl_base_info)
+
+        self.output_selector = FileSelector(
+            placeholder="Ruta y nombre del video unificado...",
+            is_save_dialog=True,
+            file_filter="Videos (*.mp4 *.mkv *.mov *.avi);;Todos (*.*)"
+        )
+        self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
+        layout_out.addWidget(self.output_selector)
+        layout.addWidget(group_out)
+
+        # 4. Vista Previa del Comando FFmpeg
+        self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
+        layout.addWidget(self.cmd_preview)
+
+        # 5. Progreso y Acciones
+        self.progress_widget = ProgressBarWithStatus(self)
+        layout.addWidget(self.progress_widget)
+
+        h_btn_layout = QHBoxLayout()
+        self.btn_run = QPushButton("Unir Segmentos", self)
+        self.btn_run.setObjectName("btn_run")
+        self.btn_run.clicked.connect(self._start_concat)
+
+        self.btn_cancel = QPushButton("Cancelar", self)
+        self.btn_cancel.setObjectName("btn_cancel")
+        self.btn_cancel.setEnabled(False)
+        self.btn_cancel.clicked.connect(self._cancel)
+
+        h_btn_layout.addWidget(self.btn_run, 2)
+        h_btn_layout.addWidget(self.btn_cancel, 1)
+        layout.addLayout(h_btn_layout)
+
+        # 6. Consola
+        self.log_console = LogConsole(self)
+        layout.addWidget(self.log_console, 1)
+
+        self.update_base_dir_display()
+
+    def _update_count(self):
+        count = self.list_widget.count()
+        self.lbl_count.setText(f"Total: {count} segmentos listados para unir")
+        self._update_output_suggestion()
+
+    def _on_use_base_changed(self):
+        use_base = self.chk_use_base.isChecked()
+        self.lbl_base_info.setVisible(use_base)
+        self.chk_subfolder.setVisible(use_base)
+        self._update_output_suggestion()
+
+    def update_base_dir_display(self):
+        base_dir = config_manager.get_base_output_dir()
+        self.lbl_base_info.setText(f"📁 <b>Carpeta Base actual:</b> <span style='color: #38bdf8;'>{base_dir}</span>")
+        use_base = self.chk_use_base.isChecked()
+        self.lbl_base_info.setVisible(use_base)
+        self.chk_subfolder.setVisible(use_base)
+        self._update_output_suggestion()
+
+    def _update_output_suggestion(self):
+        count = self.list_widget.count()
+        if count == 0:
+            self.cmd_preview.set_command("")
+            return
+
+        first_path = self.list_widget.item(0).text()
+        p = Path(first_path)
+
+        if self.chk_use_base.isChecked():
+            suggested = config_manager.suggest_output_path(
+                first_path,
+                suffix="_unido",
+                extension=p.suffix or ".mp4",
+                override_auto_subfolders=self.chk_subfolder.isChecked()
+            )
+        else:
+            suggested = str(p.parent / f"{p.stem}_unido{p.suffix}")
+
+        self.output_selector.set_path(suggested)
+        self._update_command_preview()
+
+    def _update_command_preview(self):
+        count = self.list_widget.count()
+        out_video = self.output_selector.get_path()
+        if count < 2:
+            self.cmd_preview.set_command("")
+            return
+
+        ffmpeg_path, _ = self.get_ffmpeg_paths()
+        target_out = out_video if out_video else "video_unido.mp4"
+        cmd = ffmpeg_core.build_concat_command(
+            ffmpeg_path=ffmpeg_path or "ffmpeg",
+            concat_list_file="/ruta/lista_segmentos.txt",
+            output_file=target_out
+        )
+        self.cmd_preview.set_command(cmd)
+
+    def _add_files(self):
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Seleccionar segmentos de video", "",
+            "Videos (*.mp4 *.mkv *.avi *.mov *.ts *.webm);;Todos (*.*)"
+        )
+        if files:
+            for f in sorted(files):
+                self.list_widget.addItem(f)
+            self._update_count()
+
+    def _add_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta con segmentos")
+        if folder:
+            valid_exts = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".webm", ".m4v"}
+            entries = []
+            for item in os.listdir(folder):
+                full_p = os.path.join(folder, item)
+                if os.path.isfile(full_p) and Path(full_p).suffix.lower() in valid_exts:
+                    entries.append(full_p)
+            for f in sorted(entries):
+                self.list_widget.addItem(f)
+            self._update_count()
+
+    def _move_up(self):
+        curr_row = self.list_widget.currentRow()
+        if curr_row > 0:
+            item = self.list_widget.takeItem(curr_row)
+            self.list_widget.insertItem(curr_row - 1, item)
+            self.list_widget.setCurrentRow(curr_row - 1)
+
+    def _move_down(self):
+        curr_row = self.list_widget.currentRow()
+        if curr_row < self.list_widget.count() - 1 and curr_row >= 0:
+            item = self.list_widget.takeItem(curr_row)
+            self.list_widget.insertItem(curr_row + 1, item)
+            self.list_widget.setCurrentRow(curr_row + 1)
+
+    def _remove_selected(self):
+        for item in self.list_widget.selectedItems():
+            self.list_widget.takeItem(self.list_widget.row(item))
+        self._update_count()
+
+    def _clear_list(self):
+        self.list_widget.clear()
+        self._update_count()
+
+    def _start_concat(self):
+        count = self.list_widget.count()
+        if count < 2:
+            QMessageBox.warning(self, "Segmentos insuficientes", "Añada al menos 2 segmentos para unir.")
+            return
+
+        out_file = self.output_selector.get_path()
+        if not out_file:
+            QMessageBox.warning(self, "Ruta de salida", "Especifique el archivo resultante.")
+            return
+
+        ffmpeg_path, _ = self.get_ffmpeg_paths()
+        if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
+            QMessageBox.critical(self, "FFmpeg no encontrado", "No se encontró el ejecutable FFmpeg.")
+            return
+
+        # Recoger rutas en orden
+        files = [self.list_widget.item(i).text() for i in range(count)]
+
+        # Crear archivo temporal para concat demuxer
+        temp_dir = os.path.dirname(out_file) if os.path.isdir(os.path.dirname(out_file)) else tempfile.gettempdir()
+        self.temp_list_file = os.path.join(temp_dir, f"concat_list_{os.getpid()}.txt")
+        ffmpeg_core.create_concat_list_file(files, self.temp_list_file)
+
+        mode = self.combo_mode.currentData()
+        cmd = ffmpeg_core.build_concat_command(
+            ffmpeg_path=ffmpeg_path,
+            list_file_path=self.temp_list_file,
+            output_file=out_file,
+            mode=mode
+        )
+
+        self.btn_run.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.progress_widget.reset()
+        self.log_console.clear_logs()
+
+        self.worker = FFmpegWorker(cmd, total_duration=0.0, output_path=out_file)
+        self.worker.progress_signal.connect(self.progress_widget.set_progress)
+        self.worker.log_signal.connect(self.log_console.append_log)
+        self.worker.finished_signal.connect(self._on_finished)
+        self.worker.start()
+
+    def _cancel(self):
+        if self.worker:
+            self.worker.cancel()
+
+    def _on_finished(self, success: bool, message: str, out_path: str):
+        self.btn_run.setEnabled(True)
+        self.btn_cancel.setEnabled(False)
+
+        # Limpiar archivo temporal de lista
+        if self.temp_list_file and os.path.isfile(self.temp_list_file):
+            try:
+                os.remove(self.temp_list_file)
+            except Exception:
+                pass
+            self.temp_list_file = None
+
+        if success:
+            QMessageBox.information(self, "Videos Unidos", f"{message}\nArchivo resultante:\n{out_path}")
+        else:
+            QMessageBox.warning(self, "Atención", message)
