@@ -57,7 +57,7 @@ jobs:
       - name: Empaquetar Versión Portable (.zip)
         shell: pwsh
         run: |
-          Move-Item -Path "dist\MyFFmpegGUI" -Destination "dist\MyFFmpegGUI_Portable"
+          Copy-Item -Path "dist\MyFFmpegGUI" -Destination "dist\MyFFmpegGUI_Portable" -Recurse
           Copy-Item -Path "README.md" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "instalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "desinstalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue

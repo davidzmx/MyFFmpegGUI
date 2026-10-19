@@ -37,9 +37,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "contextmenu"; Description: "Integrar atajos en el Menú Contextual (Clic derecho en videos y audios)"; GroupDescription: "Integración en el Sistema:"; Flags: checkedonce
 
 [Files]
-; Archivos compilados con PyInstaller (carpeta dist\MyFFmpegGUI o dist\MyFFmpegGUI.exe)
-Source: "dist\MyFFmpegGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Check: DirExists('dist\MyFFmpegGUI')
-Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion; Check: FileExists('dist\' + '{#MyAppExeName}')
+; Archivos compilados con PyInstaller (carpeta dist\MyFFmpegGUI)
+Source: "dist\MyFFmpegGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 ; Binarios de FFmpeg si están incluidos en bin\ (opcional)
 Source: "bin\ffmpeg.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
