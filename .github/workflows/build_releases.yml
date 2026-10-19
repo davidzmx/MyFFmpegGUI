@@ -1,0 +1,86 @@
+name: Build Installers & Packages
+
+on:
+  workflow_dispatch: # Permite ejecutar la compilación manualmente desde GitHub con un clic
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+
+jobs:
+  build-linux-deb:
+    name: Construir Paquete Linux (.deb)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Construir paquete Debian
+        run: |
+          chmod +x build_deb.sh
+          ./build_deb.sh
+
+      - name: Subir artefacto .deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: myffmpeg-gui_linux_deb
+          path: dist/*.deb
+
+  build-windows:
+    name: Construir Windows (.exe instalador y portable .zip)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout código
+        uses: actions/checkout@v4
+
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias y PyInstaller
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Compilar ejecutable con PyInstaller
+        run: |
+          pyinstaller --noconsole `
+                      --name "MyFFmpegGUI" `
+                      --add-data "ui;ui" `
+                      --hidden-import "PyQt5.QtCore" `
+                      --hidden-import "PyQt5.QtWidgets" `
+                      --hidden-import "PyQt5.QtGui" `
+                      main.py
+
+      - name: Empaquetar Versión Portable (.zip)
+        shell: pwsh
+        run: |
+          Move-Item -Path "dist\MyFFmpegGUI" -Destination "dist\MyFFmpegGUI_Portable"
+          Copy-Item -Path "README.md" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "instalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "desinstalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "dist\MyFFmpegGUI_Portable" -DestinationPath "dist\MyFFmpegGUI_Portable_Windows.zip"
+
+      - name: Instalar Inno Setup con Chocolatey
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+
+      - name: Compilar Instalador de Windows (.exe)
+        shell: cmd
+        run: |
+          "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer_windows.iss
+
+      - name: Subir Instalador Windows (.exe)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyFFmpegGUI_Windows_Setup_Exe
+          path: Output/*.exe
+
+      - name: Subir Paquete Portable Windows (.zip)
+        uses: actions/upload-artifact@v4
+        with:
+          name: MyFFmpegGUI_Windows_Portable_Zip
+          path: dist/MyFFmpegGUI_Portable_Windows.zip
