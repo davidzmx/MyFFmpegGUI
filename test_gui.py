@@ -41,14 +41,15 @@ class TestFFmpegSuite(unittest.TestCase):
         self.tmp_dir = tempfile.TemporaryDirectory()
         self.tmp_path = self.tmp_dir.name
 
-        # Generar un video sintético de prueba de 4 segundos con audio
+        # Generar un video sintético de prueba de 5 segundos con audio
         self.test_video = os.path.join(self.tmp_path, "sample_test.mp4")
         cmd_gen = [
             self.ffmpeg_path, "-y",
-            "-f", "lavfi", "-i", "testsrc=duration=4:size=320x240:rate=30",
-            "-f", "lavfi", "-i", "sine=frequency=440:duration=4",
+            "-f", "lavfi", "-i", "testsrc=duration=5:size=320x240:rate=30",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=5",
             "-c:v", "libx264", "-pix_fmt", "yuv420p",
             "-c:a", "aac", "-b:a", "128k",
+            "-shortest",
             self.test_video
         ]
         res = subprocess.run(cmd_gen, stdout=subprocess.PIPE, stderr=subprocess.PIPE)

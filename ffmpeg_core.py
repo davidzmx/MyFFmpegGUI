@@ -474,8 +474,8 @@ def build_segment_command(
         cmd.extend([
             "-c", "copy",
             "-map", "0",
-            "-segment_time", str(segment_duration_sec),
             "-f", "segment",
+            "-segment_time", str(segment_duration_sec),
             "-reset_timestamps", "1"
         ])
     else:
@@ -486,10 +486,11 @@ def build_segment_command(
             "-crf", "17",
             "-preset", "fast",
             "-force_key_frames", force_kf,
-            "-c:a", "copy",
+            "-c:a", "aac",
+            "-b:a", "128k",
             "-map", "0",
-            "-segment_time", str(segment_duration_sec),
             "-f", "segment",
+            "-segment_time", str(segment_duration_sec),
             "-reset_timestamps", "1"
         ])
 
