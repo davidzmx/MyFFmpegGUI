@@ -158,3 +158,18 @@ Para instalar la aplicación en el espacio de usuario (`~/.local/share/myffmpeg-
   ./uninstall.sh
   ```
 
+---
+
+## 🛡️ Nota sobre Antivirus, Google Chrome y Windows SmartScreen
+
+Al descargar el instalador o la versión portable en Windows, es posible que el navegador (Google Chrome) o Windows SmartScreen muestren avisos preventivos como:
+* *"Chrome ha bloqueado esta descarga porque el archivo es peligroso"*
+* *"Windows protegió su PC (SmartScreen impidió el inicio de una aplicación no reconocida)"*
+
+**¿Por qué sucede esto?**
+1. **Falta de Certificado de Firma Comercial:** Como proyecto de código abierto independiente, los binarios no cuentan con un certificado de firma comercial (*Code Signing Certificate*), el cual tiene costos corporativos anuales recurrentes.
+2. **Reputación del Archivo Nuevo:** Cada compilación generada por GitHub Actions tiene una firma criptográfica (hash SHA-256) completamente nueva en los servidores de Google y Microsoft, por lo que los sistemas heurísticos la marcan por precaución hasta que acumula descargas y antigüedad.
+3. **Empaquetado PyInstaller:** El empaquetado del intérprete de Python suele generar falsos positivos genéricos en motores antivirus automatizados.
+
+El código fuente es 100% público, auditable y transparente en este repositorio. Puedes subir cualquier archivo compilado a [VirusTotal](https://www.virustotal.com/) para auditarlo en más de 70 motores antivirus.
+
