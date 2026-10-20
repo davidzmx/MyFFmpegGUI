@@ -48,7 +48,9 @@ jobs:
         run: |
           pyinstaller --noconsole `
                       --name "MyFFmpegGUI" `
+                      --icon "assets/icon.ico" `
                       --add-data "ui;ui" `
+                      --add-data "assets;assets" `
                       --hidden-import "PyQt5.QtCore" `
                       --hidden-import "PyQt5.QtWidgets" `
                       --hidden-import "PyQt5.QtGui" `
@@ -57,26 +59,45 @@ jobs:
       - name: Descargar e integrar FFmpeg y FFprobe oficiales para Windows
         shell: pwsh
         run: |
+          # 1. Instalar FFmpeg mediante Chocolatey
           choco install ffmpeg --no-progress -y
-          $ffmpeg = (Get-Command ffmpeg.exe).Source
-          $ffprobe = (Get-Command ffprobe.exe).Source
+
+          # 2. Localizar los ejecutables REALES (>10MB) dentro de chocolatey\lib (¡NO los shims de 35KB de chocolatey\bin!)
+          $realFfmpeg = (Get-ChildItem -Path "$env:ProgramData\chocolatey\lib\ffmpeg" -Filter "ffmpeg.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 10MB } | Select-Object -First 1).FullName
+          $realFfprobe = (Get-ChildItem -Path "$env:ProgramData\chocolatey\lib\ffmpeg" -Filter "ffprobe.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 10MB } | Select-Object -First 1).FullName
+
+          # 3. Fallback: Si Chocolatey no tiene los binarios reales, descargar el paquete oficial Gyan.dev essentials
+          if (-not $realFfmpeg -or -not $realFfprobe) {
+              Write-Host "Descargando binarios oficiales de FFmpeg desde Gyan.dev..."
+              Invoke-WebRequest -Uri "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" -OutFile "ffmpeg_release.zip"
+              Expand-Archive -Path "ffmpeg_release.zip" -DestinationPath "ffmpeg_temp"
+              $realFfmpeg = (Get-ChildItem -Path "ffmpeg_temp" -Filter "ffmpeg.exe" -Recurse | Where-Object { $_.Length -gt 10MB } | Select-Object -First 1).FullName
+              $realFfprobe = (Get-ChildItem -Path "ffmpeg_temp" -Filter "ffprobe.exe" -Recurse | Where-Object { $_.Length -gt 10MB } | Select-Object -First 1).FullName
+          }
+
           New-Item -ItemType Directory -Force -Path "bin"
-          Copy-Item $ffmpeg "bin\ffmpeg.exe"
-          Copy-Item $ffprobe "bin\ffprobe.exe"
-          Write-Host "FFmpeg copiado exitosamente desde $ffmpeg"
-          Write-Host "FFprobe copiado exitosamente desde $ffprobe"
+          Copy-Item -Path $realFfmpeg -Destination "bin\ffmpeg.exe" -Force
+          Copy-Item -Path $realFfprobe -Destination "bin\ffprobe.exe" -Force
+
+          $ffmpegSize = [math]::Round(((Get-Item "bin\ffmpeg.exe").Length / 1MB), 2)
+          $ffprobeSize = [math]::Round(((Get-Item "bin\ffprobe.exe").Length / 1MB), 2)
+          Write-Host "FFmpeg real verificado: bin\ffmpeg.exe ($ffmpegSize MB)"
+          Write-Host "FFprobe real verificado: bin\ffprobe.exe ($ffprobeSize MB)"
+
+          if ($ffmpegSize -lt 10) { throw "Error critico: ffmpeg.exe mide $ffmpegSize MB (es un shim, no el ejecutable real)" }
+          if ($ffprobeSize -lt 10) { throw "Error critico: ffprobe.exe mide $ffprobeSize MB (es un shim, no el ejecutable real)" }
 
       - name: Empaquetar Versión Portable (.zip)
         shell: pwsh
         run: |
           Copy-Item -Path "dist\MyFFmpegGUI" -Destination "dist\MyFFmpegGUI_Portable" -Recurse
           New-Item -ItemType Directory -Force -Path "dist\MyFFmpegGUI_Portable\bin"
-          Copy-Item -Path "bin\ffmpeg.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -ErrorAction SilentlyContinue
-          Copy-Item -Path "bin\ffprobe.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -ErrorAction SilentlyContinue
+          Copy-Item -Path "bin\ffmpeg.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -Force
+          Copy-Item -Path "bin\ffprobe.exe" -Destination "dist\MyFFmpegGUI_Portable\bin\" -Force
           Copy-Item -Path "README.md" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "instalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
           Copy-Item -Path "desinstalar_menu_contextual_windows.reg" -Destination "dist\MyFFmpegGUI_Portable\" -ErrorAction SilentlyContinue
-          Compress-Archive -Path "dist\MyFFmpegGUI_Portable" -DestinationPath "dist\MyFFmpegGUI_Portable_Windows.zip"
+          Compress-Archive -Path "dist\MyFFmpegGUI_Portable" -DestinationPath "dist\MyFFmpegGUI_Portable_Windows.zip" -Force
 
       - name: Instalar Inno Setup con Chocolatey
         shell: pwsh

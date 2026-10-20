@@ -38,7 +38,9 @@ rmdir /s /q dist\MyFFmpegGUI 2>nul
 echo [*] Compilando con PyInstaller en modo carpeta portable (arranque instantaneo)...
 pyinstaller --noconsole ^
             --name "MyFFmpegGUI" ^
+            --icon "assets\icon.ico" ^
             --add-data "ui;ui" ^
+            --add-data "assets;assets" ^
             --hidden-import "PyQt5.QtCore" ^
             --hidden-import "PyQt5.QtWidgets" ^
             --hidden-import "PyQt5.QtGui" ^

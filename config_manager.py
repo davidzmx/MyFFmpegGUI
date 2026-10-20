@@ -28,6 +28,27 @@ def get_config_file_path() -> Path:
 CONFIG_FILE = get_config_file_path()
 
 
+def get_app_icon_path() -> Optional[str]:
+    """Devuelve la ruta absoluta al archivo de icono de la aplicación (ico o png)."""
+    search_dirs = []
+    if getattr(sys, "_MEIPASS", None):
+        search_dirs.append(Path(sys._MEIPASS) / "assets")
+        search_dirs.append(Path(sys._MEIPASS))
+    app_dir = get_app_dir()
+    search_dirs.append(app_dir / "assets")
+    search_dirs.append(app_dir)
+    search_dirs.append(Path(__file__).resolve().parent / "assets")
+
+    # En Windows preferir .ico (multiresolución para barra de título y barra de tareas), en Linux .png
+    preferred_names = ["icon.ico", "icon.png"] if sys.platform == "win32" else ["icon.png", "icon.ico"]
+    for d in search_dirs:
+        for name in preferred_names:
+            candidate = d / name
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
 def get_default_base_dir() -> str:
     """Devuelve una carpeta base por defecto según el sistema operativo."""
     home = Path.home()

@@ -26,7 +26,8 @@ SolidCompression=yes
 WizardStyle=modern
 DisableDirPage=no
 DisableProgramGroupPage=no
-UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=assets\icon.ico
+UninstallDisplayIcon={app}\assets\icon.ico
 
 [Languages]
 Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
@@ -40,6 +41,9 @@ Name: "contextmenu"; Description: "Integrar atajos en el Menú Contextual (Clic 
 ; Archivos compilados con PyInstaller (carpeta dist\MyFFmpegGUI)
 Source: "dist\MyFFmpegGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+; Iconos y recursos
+Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+
 ; Binarios de FFmpeg si están incluidos en bin\ (opcional)
 Source: "bin\ffmpeg.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "bin\ffprobe.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
@@ -49,9 +53,9 @@ Source: "instalar_menu_contextual_windows.reg"; DestDir: "{app}"; Flags: ignorev
 Source: "desinstalar_menu_contextual_windows.reg"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\icon.ico"
 Name: "{group}\Desinstalar {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\assets\icon.ico"; Tasks: desktopicon
 
 [Run]
 ; Si el usuario marcó la opción de menú contextual, registrarlo automáticamente usando la propia app

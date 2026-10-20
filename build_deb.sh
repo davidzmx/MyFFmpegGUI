@@ -22,7 +22,7 @@ mkdir -p "$PKG_DIR/DEBIAN"
 mkdir -p "$PKG_DIR/usr/bin"
 mkdir -p "$PKG_DIR/usr/share/myffmpeg-gui"
 mkdir -p "$PKG_DIR/usr/share/applications"
-mkdir -p "$PKG_DIR/usr/share/icons/hicolor/scalable/apps"
+mkdir -p "$PKG_DIR/usr/share/icons/hicolor/512x512/apps"
 
 # 2. Copiar archivos de la aplicación a /usr/share/myffmpeg-gui
 echo "[*] Copiando archivos de la aplicacion..."
@@ -32,8 +32,15 @@ cp "$PROJECT_DIR/ffmpeg_worker.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/config_manager.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/context_menu_manager.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp -r "$PROJECT_DIR/ui" "$PKG_DIR/usr/share/myffmpeg-gui/"
+if [ -d "$PROJECT_DIR/assets" ]; then
+    cp -r "$PROJECT_DIR/assets" "$PKG_DIR/usr/share/myffmpeg-gui/"
+    if [ -f "$PROJECT_DIR/assets/icon.png" ]; then
+        cp "$PROJECT_DIR/assets/icon.png" "$PKG_DIR/usr/share/icons/hicolor/512x512/apps/myffmpeg-gui.png"
+    fi
+fi
 
-# Permisos de ejecución
+# Permisos de ejecución y limpieza de pycache
+find "$PKG_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 chmod +x "$PKG_DIR/usr/share/myffmpeg-gui/main.py"
 
 # 3. Crear script lanzador en /usr/bin/myffmpeg-gui
@@ -51,7 +58,7 @@ Name=MyFFmpeg GUI
 GenericName=Suite Multimedia FFmpeg
 Comment=Herramienta gráfica y atajos rápidos para FFmpeg sin pérdida
 Exec=/usr/bin/myffmpeg-gui
-Icon=applications-multimedia
+Icon=myffmpeg-gui
 Terminal=false
 Categories=AudioVideo;AudioVideoEditing;
 EOF

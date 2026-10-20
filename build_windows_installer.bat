@@ -37,7 +37,9 @@ rmdir /s /q dist 2>nul
 
 pyinstaller --noconsole ^
             --name "MyFFmpegGUI" ^
+            --icon "assets\icon.ico" ^
             --add-data "ui;ui" ^
+            --add-data "assets;assets" ^
             --hidden-import "PyQt5.QtCore" ^
             --hidden-import "PyQt5.QtWidgets" ^
             --hidden-import "PyQt5.QtGui" ^

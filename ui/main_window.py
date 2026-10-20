@@ -12,6 +12,7 @@ from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QScrollArea
 )
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
 import ffmpeg_core
@@ -29,6 +30,12 @@ class MainWindow(QMainWindow):
     def __init__(self, initial_tab: str = None, initial_file: str = None):
         super().__init__()
         self.setWindowTitle("MyFFmpeg GUI - Procesamiento Multimedia Sin Pérdida (Windows & Linux)")
+
+        # Establecer icono de la ventana principal
+        icon_path = config_manager.get_app_icon_path()
+        if icon_path:
+            self.setWindowIcon(QIcon(icon_path))
+
         self.resize(1000, 780)
         self.setMinimumSize(880, 640)
 

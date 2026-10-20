@@ -11,8 +11,10 @@ import sys
 import os
 import argparse
 from PyQt5.QtWidgets import QApplication
+from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
 
+import config_manager
 from ui.styles import DARK_THEME_QSS, get_dark_palette, configure_dark_icon_theme
 from ui.main_window import MainWindow
 
@@ -75,6 +77,15 @@ def main():
         success = context_menu_manager.execute_quick_action(args.quick_action, args.file_path)
         sys.exit(0 if success else 1)
 
+    # En Windows, asignar ID explícito de aplicación para que la barra de tareas muestre el icono propio
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            myappid = "davidzmx.myffmpeggui.app.1.0"
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+
     # Habilitar soporte High DPI para pantallas 2K/4K en Windows y Linux
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
         QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -84,6 +95,11 @@ def main():
     app = QApplication(sys.argv)
     app.setApplicationName("MyFFmpegGUI")
     app.setOrganizationName("MyTests")
+
+    # Establecer icono de la aplicación (barra de tareas, ventanas y diálogos emergentes)
+    icon_path = config_manager.get_app_icon_path()
+    if icon_path:
+        app.setWindowIcon(QIcon(icon_path))
 
     # Configurar tema de iconos oscuro para máxima legibilidad en botones y carpetas
     configure_dark_icon_theme()
