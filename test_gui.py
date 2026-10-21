@@ -22,6 +22,7 @@ import unittest
 from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication
+from ui.main_window import MainWindow
 import ffmpeg_core
 import config_manager
 
@@ -399,6 +400,50 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(res_uninst.returncode, 0)
         # Reinstalar para mantener la integración activa en el entorno del usuario
         subprocess.run([sys.executable, "main.py", "--install-context"], capture_output=True)
+
+    def test_14_tab_concat_interactions(self):
+        """Verifica que TabConcat agregue archivos, ordene naturalmente y actualice vista previa sin cerrarse."""
+        win = MainWindow(initial_tab="concat")
+        concat_tab = win.tab_concat
+
+        # Crear archivos de prueba desordenados
+        f1 = os.path.join(self.tmp_path, "clip_1.mp4")
+        f2 = os.path.join(self.tmp_path, "clip_2.mp4")
+        f10 = os.path.join(self.tmp_path, "clip_10.mp4")
+        for f in [f1, f2, f10]:
+            with open(f, "wb") as fp:
+                fp.write(b"dummy")
+
+        # 1. Insertar archivos en orden inverso
+        concat_tab._insert_paths([f10, f2, f1])
+        self.assertEqual(concat_tab.list_widget.count(), 3)
+        # Verificar ordenamiento natural (1 -> 2 -> 10, no 1 -> 10 -> 2)
+        self.assertEqual(concat_tab.list_widget.item(0).text(), f1)
+        self.assertEqual(concat_tab.list_widget.item(1).text(), f2)
+        self.assertEqual(concat_tab.list_widget.item(2).text(), f10)
+
+        # 2. Verificar que la vista previa del comando se generó correctamente
+        preview_text = concat_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("ffmpeg", preview_text)
+        self.assertIn("-f concat", preview_text)
+        self.assertIn("-c copy", preview_text)
+
+        # 3. Cambiar a modo recodificación y verificar actualización
+        concat_tab.combo_mode.setCurrentIndex(1)
+        preview_reencode = concat_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("libx264", preview_reencode)
+
+        # 4. Probar mover elementos arriba y abajo
+        concat_tab.list_widget.setCurrentRow(1)
+        concat_tab._move_up()
+        self.assertEqual(concat_tab.list_widget.item(0).text(), f2)
+
+        # 5. Probar limpieza
+        concat_tab._clear_list()
+        self.assertEqual(concat_tab.list_widget.count(), 0)
+        self.assertIn("Seleccione los archivos", concat_tab.cmd_preview.text_cmd.toPlainText())
+
+        win.close()
 
 
 if __name__ == "__main__":

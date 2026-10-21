@@ -500,19 +500,21 @@ def build_segment_command(
 
 def build_concat_command(
     ffmpeg_path: str,
-    list_file_path: str,
-    output_file: str,
-    mode: str = "copy"  # "copy" (demuxer concat sin recodificar) o "reencode" (si provienen de formatos distintos)
+    list_file_path: str = None,
+    output_file: str = "",
+    mode: str = "copy",  # "copy" (demuxer concat sin recodificar) o "reencode" (si provienen de formatos distintos)
+    concat_list_file: str = None
 ) -> List[str]:
     """
     Construye el comando para unir segmentos.
     - 'copy': Modo demuxer concat sin pérdida y sin recodificación.
     """
+    actual_list = list_file_path or concat_list_file or ""
     cmd = [
         ffmpeg_path, "-y",
         "-f", "concat",
         "-safe", "0",
-        "-i", list_file_path
+        "-i", actual_list
     ]
 
     if mode == "copy":

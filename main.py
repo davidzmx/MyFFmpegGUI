@@ -92,6 +92,26 @@ def main():
     if hasattr(Qt, "AA_UseHighDpiPixmaps"):
         QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
+    # Manejador global de excepciones para evitar cierres abruptos silenciosos
+    def handle_unhandled_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        import traceback
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        print(f"[ERROR NO CONTROLADO]:\n{tb_str}", file=sys.stderr)
+        try:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                None,
+                "Error en la aplicación",
+                f"Ocurrió un error inesperado:\n\n{exc_value}\n\nDetalles:\n{tb_str[:800]}"
+            )
+        except Exception:
+            pass
+
+    sys.excepthook = handle_unhandled_exception
+
     app = QApplication(sys.argv)
     app.setApplicationName("MyFFmpegGUI")
     app.setOrganizationName("MyTests")

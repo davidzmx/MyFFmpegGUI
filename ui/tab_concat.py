@@ -18,6 +18,36 @@ import config_manager
 from ffmpeg_worker import FFmpegWorker
 
 
+class SegmentListWidget(QListWidget):
+    """Lista interactiva con soporte de reordenamiento interno y arrastrar archivos desde el explorador."""
+    def __init__(self, on_files_dropped=None, parent=None):
+        super().__init__(parent)
+        self.on_files_dropped = on_files_dropped
+        self.setAcceptDrops(True)
+        self.setDragDropMode(QListWidget.InternalMove)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasUrls():
+            paths = [u.toLocalFile() for u in event.mimeData().urls() if u.toLocalFile()]
+            if paths and self.on_files_dropped:
+                self.on_files_dropped(paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class TabConcat(QWidget):
     def __init__(self, get_ffmpeg_paths_fn, parent=None):
         super().__init__(parent)
@@ -32,9 +62,7 @@ class TabConcat(QWidget):
         group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial)")
         layout_list = QVBoxLayout(group_list)
 
-        self.list_widget = QListWidget(self)
-        self.list_widget.setAcceptDrops(True)
-        self.list_widget.setDragDropMode(QListWidget.InternalMove)
+        self.list_widget = SegmentListWidget(on_files_dropped=self._insert_paths, parent=self)
         layout_list.addWidget(self.list_widget)
 
         # Botones de gestión de lista
@@ -84,6 +112,7 @@ class TabConcat(QWidget):
         self.combo_mode.addItem(
             "Recodificación Inteligente (Para videos con diferente resolución o códec)", "reencode"
         )
+        self.combo_mode.currentIndexChanged.connect(lambda _: self._update_command_preview())
         h_mode.addWidget(self.combo_mode, 1)
         layout_opts.addLayout(h_mode)
 
@@ -173,13 +202,55 @@ class TabConcat(QWidget):
         self.chk_subfolder.setVisible(use_base)
         self._update_output_suggestion()
 
+    def _insert_paths(self, paths: list):
+        """Inserta archivos de video en la lista con ordenamiento natural y sin duplicados."""
+        if not paths:
+            return
+
+        import re
+        def natural_sort_key(s):
+            return [int(text) if text.isdigit() else text.lower() for text in re.split(r'(\d+)', str(s))]
+
+        valid_exts = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".webm", ".m4v", ".flv", ".vob", ".wmv"}
+        expanded = []
+        for p in paths:
+            p_str = str(p)
+            if os.path.isdir(p_str):
+                try:
+                    for item in os.listdir(p_str):
+                        full = os.path.join(p_str, item)
+                        if os.path.isfile(full) and Path(full).suffix.lower() in valid_exts:
+                            expanded.append(full)
+                except Exception:
+                    pass
+            elif os.path.isfile(p_str):
+                if Path(p_str).suffix.lower() in valid_exts or not Path(p_str).suffix:
+                    expanded.append(p_str)
+
+        existing = {self.list_widget.item(i).text() for i in range(self.list_widget.count())}
+        added_count = 0
+        for f in sorted(expanded, key=natural_sort_key):
+            if f not in existing:
+                self.list_widget.addItem(f)
+                existing.add(f)
+                added_count += 1
+
+        if added_count > 0:
+            self._update_count()
+
     def _update_output_suggestion(self):
         count = self.list_widget.count()
         if count == 0:
+            self.output_selector.set_path("")
             self.cmd_preview.set_command("")
             return
 
-        first_path = self.list_widget.item(0).text()
+        first_item = self.list_widget.item(0)
+        if not first_item:
+            self.cmd_preview.set_command("")
+            return
+
+        first_path = first_item.text()
         p = Path(first_path)
 
         if self.chk_use_base.isChecked():
@@ -204,35 +275,49 @@ class TabConcat(QWidget):
 
         ffmpeg_path, _ = self.get_ffmpeg_paths()
         target_out = out_video if out_video else "video_unido.mp4"
-        cmd = ffmpeg_core.build_concat_command(
-            ffmpeg_path=ffmpeg_path or "ffmpeg",
-            concat_list_file="/ruta/lista_segmentos.txt",
-            output_file=target_out
-        )
-        self.cmd_preview.set_command(cmd)
+        mode = self.combo_mode.currentData() if hasattr(self, "combo_mode") else "copy"
+        try:
+            cmd = ffmpeg_core.build_concat_command(
+                ffmpeg_path=ffmpeg_path or "ffmpeg",
+                list_file_path="/ruta/lista_segmentos.txt",
+                output_file=target_out,
+                mode=mode
+            )
+            self.cmd_preview.set_command(cmd)
+        except Exception as e:
+            self.cmd_preview.set_command(f"# Vista previa no disponible: {e}")
 
     def _add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self, "Seleccionar segmentos de video", "",
-            "Videos (*.mp4 *.mkv *.avi *.mov *.ts *.webm);;Todos (*.*)"
+            "Videos (*.mp4 *.mkv *.avi *.mov *.ts *.webm *.m4v);;Todos (*.*)"
         )
         if files:
-            for f in sorted(files):
-                self.list_widget.addItem(f)
-            self._update_count()
+            self._insert_paths(files)
 
     def _add_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Seleccionar carpeta con segmentos")
         if folder:
-            valid_exts = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".webm", ".m4v"}
+            valid_exts = {".mp4", ".mkv", ".avi", ".mov", ".ts", ".webm", ".m4v", ".flv", ".vob", ".wmv"}
             entries = []
-            for item in os.listdir(folder):
-                full_p = os.path.join(folder, item)
-                if os.path.isfile(full_p) and Path(full_p).suffix.lower() in valid_exts:
-                    entries.append(full_p)
-            for f in sorted(entries):
-                self.list_widget.addItem(f)
-            self._update_count()
+            try:
+                for item in os.listdir(folder):
+                    full_p = os.path.join(folder, item)
+                    if os.path.isfile(full_p) and Path(full_p).suffix.lower() in valid_exts:
+                        entries.append(full_p)
+            except Exception as e:
+                QMessageBox.warning(self, "Error al leer carpeta", f"No se pudo acceder a la carpeta seleccionada:\n{e}")
+                return
+
+            if not entries:
+                QMessageBox.information(
+                    self,
+                    "Sin segmentos compatibles",
+                    "No se encontraron archivos de video compatibles (.mp4, .mkv, .avi, .mov, etc.) en la carpeta seleccionada."
+                )
+                return
+
+            self._insert_paths(entries)
 
     def _move_up(self):
         curr_row = self.list_widget.currentRow()
