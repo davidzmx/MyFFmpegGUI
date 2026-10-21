@@ -320,8 +320,33 @@ QFileDialog QWidget#sidebar, QFileDialog QListView[viewMode="0"] {
     border-right: 1px solid #2d314d;
 }
 
-QSplitter::handle {
-    background-color: #2d314d;
+QSplitter::handle:vertical {
+    height: 8px;
+    background-color: #272a42;
+    border-top: 1px solid #3b3f63;
+    border-bottom: 1px solid #1a1c2d;
+    border-radius: 3px;
+    margin: 2px 4px;
+}
+
+QSplitter::handle:vertical:hover {
+    background-color: #4f46e5;
+    border-color: #818cf8;
+}
+
+QSplitter::handle:vertical:pressed {
+    background-color: #6366f1;
+}
+
+QSplitter::handle:horizontal {
+    width: 6px;
+    background-color: #272a42;
+    border-left: 1px solid #3b3f63;
+    border-right: 1px solid #1a1c2d;
+}
+
+QSplitter::handle:horizontal:hover {
+    background-color: #4f46e5;
 }
 
 /* Consola de Registros / Logs (QPlainTextEdit) */

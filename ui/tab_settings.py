@@ -14,7 +14,7 @@ from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QLineEdit, QPushButton, QMessageBox, QTextEdit, QCheckBox, QRadioButton, QScrollArea,
-    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QFormLayout
+    QTableWidget, QTableWidgetItem, QHeaderView, QDialog, QDialogButtonBox, QFormLayout, QStyle
 )
 import ffmpeg_core
 import config_manager
@@ -192,7 +192,8 @@ class TabSettings(QWidget):
         h_base_desc = QHBoxLayout()
         lbl_base_desc = QLabel("Ruta de la Carpeta Base predeterminada:")
         lbl_base_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        btn_open_base = QPushButton("📁 Abrir en Explorador")
+        btn_open_base = QPushButton("Abrir en Explorador")
+        btn_open_base.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         btn_open_base.setToolTip("Abrir la carpeta base actual en el explorador de archivos del sistema")
         btn_open_base.setStyleSheet("""
             QPushButton {

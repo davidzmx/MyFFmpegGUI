@@ -86,7 +86,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._wrap_tab(self.tab_extract), "Extraer Fotogramas")
         self.tabs.addTab(self._wrap_tab(self.tab_create), "Crear Video")
         self.tabs.addTab(self._wrap_tab(self.tab_segment), "Segmentar Video")
-        self.tabs.addTab(self._wrap_tab(self.tab_concat), "Unir Segmentos")
+        self.tabs.addTab(self.tab_concat, "Unir Segmentos")
         self.tabs.addTab(self.tab_settings, "Ajustes")
 
         # Mapa de nombres de pestañas para invocación desde CLI y menú contextual

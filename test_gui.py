@@ -465,10 +465,11 @@ class TestFFmpegSuite(unittest.TestCase):
         win = MainWindow(initial_tab="concat")
         concat_tab = win.tab_concat
 
-        # 1. Comprobar que TabConcat utiliza un QSplitter vertical y que la lista tiene altura mínima expandible
+        # 1. Comprobar que TabConcat utiliza un QSplitter vertical de 3 secciones (lista, controles, terminal)
         splitters = concat_tab.findChildren(QSplitter)
-        self.assertGreater(len(splitters), 0, "TabConcat debe contener un QSplitter para redimensionar la lista")
-        self.assertGreaterEqual(concat_tab.list_widget.minimumHeight(), 150)
+        self.assertGreater(len(splitters), 0, "TabConcat debe contener un QSplitter")
+        self.assertEqual(concat_tab.splitter.count(), 3, "El splitter debe contener 3 secciones: lista, opciones y terminal")
+        self.assertGreater(concat_tab.list_widget.minimumHeight(), 0)
 
         # 2. Comprobar presencia de OutputActionsWidget en las pestañas principales
         for tab_name, tab_obj in [
@@ -498,7 +499,9 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertTrue(actions_w.isVisible())
         self.assertTrue(actions_w.btn_open_file.isVisible())
         self.assertTrue(actions_w.btn_open_folder.isVisible())
-        self.assertEqual(actions_w.btn_open_file.text(), "▶ Abrir Video")
+        self.assertEqual(actions_w.btn_open_file.text(), "Abrir Video")
+        self.assertFalse(actions_w.btn_open_file.icon().isNull())
+        self.assertFalse(actions_w.btn_open_folder.icon().isNull())
 
         actions_w.hide_output()
         self.assertFalse(actions_w.isVisible())

@@ -10,7 +10,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox,
-    QSplitter, QSizePolicy
+    QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle
 )
 from PyQt5.QtCore import Qt
 from ui.widgets import (
@@ -59,22 +59,23 @@ class TabConcat(QWidget):
         self.temp_list_file = None
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(0)
+        layout.setContentsMargins(6, 6, 6, 6)
 
-        # Divisor vertical interactivo (Splitter) para permitir redimensionar la lista de segmentos
+        # Divisor vertical interactivo de 3 secciones (Lista, Controles, Terminal)
         self.splitter = QSplitter(Qt.Vertical, self)
         self.splitter.setChildrenCollapsible(False)
 
-        # 1. Lista interactiva de segmentos (Panel superior)
-        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial - Ajustable arrastrando la barra divisoria)")
+        # 1. Lista interactiva de segmentos (Panel superior - Redimensionable)
+        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial - Redimensionable arrastrando barra divisoria)")
+        group_list.setMinimumHeight(110)
         layout_list = QVBoxLayout(group_list)
         layout_list.setSpacing(8)
 
         self.list_widget = SegmentListWidget(on_files_dropped=self._insert_paths, parent=self)
-        self.list_widget.setMinimumHeight(160)
+        self.list_widget.setMinimumHeight(60)
         self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout_list.addWidget(self.list_widget)
+        layout_list.addWidget(self.list_widget, 1)
 
         # Botones de gestión de lista
         h_tools = QHBoxLayout()
@@ -110,13 +111,18 @@ class TabConcat(QWidget):
 
         self.splitter.addWidget(group_list)
 
-        # Contenedor inferior para opciones, comandos y consola
-        bottom_panel = QWidget(self)
-        layout_bottom = QVBoxLayout(bottom_panel)
-        layout_bottom.setContentsMargins(0, 0, 0, 0)
-        layout_bottom.setSpacing(10)
+        # 2. Panel Central: Opciones, Salida, Previa y Botones (Con scroll interno fluido)
+        middle_scroll = QScrollArea(self)
+        middle_scroll.setWidgetResizable(True)
+        middle_scroll.setFrameShape(QFrame.NoFrame)
+        middle_scroll.setMinimumHeight(120)
 
-        # 2. Configuración de unión
+        middle_container = QWidget()
+        layout_middle = QVBoxLayout(middle_container)
+        layout_middle.setContentsMargins(0, 4, 0, 4)
+        layout_middle.setSpacing(10)
+
+        # 2.1 Modo de Unión
         group_opts = QGroupBox("2. Modo de Unión")
         layout_opts = QVBoxLayout(group_opts)
 
@@ -139,9 +145,9 @@ class TabConcat(QWidget):
         )
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
-        layout_bottom.addWidget(group_opts)
+        layout_middle.addWidget(group_opts)
 
-        # 3. Archivo Resultante
+        # 2.2 Archivo Final Unificado
         group_out = QGroupBox("3. Archivo Final Unificado")
         layout_out = QVBoxLayout(group_out)
 
@@ -159,9 +165,17 @@ class TabConcat(QWidget):
         h_sub_opt.addStretch()
         layout_out.addLayout(h_sub_opt)
 
+        h_base_layout = QHBoxLayout()
+        h_base_layout.setContentsMargins(0, 0, 0, 0)
+        h_base_layout.setSpacing(6)
+        self.icon_base_dir = QLabel()
+        self.icon_base_dir.setPixmap(self.style().standardIcon(QStyle.SP_DirIcon).pixmap(16, 16))
         self.lbl_base_info = QLabel()
         self.lbl_base_info.setStyleSheet("color: #38bdf8; font-size: 11px; padding: 2px 0px;")
-        layout_out.addWidget(self.lbl_base_info)
+        h_base_layout.addWidget(self.icon_base_dir)
+        h_base_layout.addWidget(self.lbl_base_info)
+        h_base_layout.addStretch()
+        layout_out.addLayout(h_base_layout)
 
         self.output_selector = FileSelector(
             placeholder="Ruta y nombre del video unificado...",
@@ -170,19 +184,18 @@ class TabConcat(QWidget):
         )
         self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
         layout_out.addWidget(self.output_selector)
-        layout_bottom.addWidget(group_out)
+        layout_middle.addWidget(group_out)
 
-        # 4. Vista Previa del Comando FFmpeg
+        # 2.3 Vista Previa del Comando FFmpeg
         self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout_bottom.addWidget(self.cmd_preview)
+        layout_middle.addWidget(self.cmd_preview)
 
-        # 5. Progreso y Acciones
+        # 2.4 Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout_bottom.addWidget(self.progress_widget)
+        layout_middle.addWidget(self.progress_widget)
 
-        # 5.5 Acciones post-generación (Abrir Video / Abrir Carpeta)
         self.output_actions = OutputActionsWidget(file_label="Abrir Video Unido", parent=self)
-        layout_bottom.addWidget(self.output_actions)
+        layout_middle.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Unir Segmentos", self)
@@ -196,18 +209,25 @@ class TabConcat(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout_bottom.addLayout(h_btn_layout)
+        layout_middle.addLayout(h_btn_layout)
 
-        # 6. Consola
+        middle_scroll.setWidget(middle_container)
+        self.splitter.addWidget(middle_scroll)
+
+        # 3. Terminal de Salida (FFmpeg) - Redimensionable mediante divisor inferior
         self.log_console = LogConsole(self)
-        layout_bottom.addWidget(self.log_console, 1)
+        self.log_console.setMinimumHeight(60)
+        self.splitter.addWidget(self.log_console)
 
-        self.splitter.addWidget(bottom_panel)
+        # Proporciones equilibradas y expansión interactiva en ambas barras divisoras
+        self.splitter.setCollapsible(0, False)
+        self.splitter.setCollapsible(1, False)
+        self.splitter.setCollapsible(2, False)
 
-        # Proporciones iniciales: 250px para la lista, 450px para el panel inferior
-        self.splitter.setSizes([250, 450])
-        self.splitter.setStretchFactor(0, 2)
-        self.splitter.setStretchFactor(1, 3)
+        self.splitter.setSizes([220, 310, 140])
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 4)
+        self.splitter.setStretchFactor(2, 2)
 
         layout.addWidget(self.splitter)
 
@@ -220,6 +240,7 @@ class TabConcat(QWidget):
 
     def _on_use_base_changed(self):
         use_base = self.chk_use_base.isChecked()
+        self.icon_base_dir.setVisible(use_base)
         self.lbl_base_info.setVisible(use_base)
         self.chk_subfolder.setVisible(use_base)
         self._update_output_suggestion()
@@ -227,11 +248,12 @@ class TabConcat(QWidget):
     def update_base_dir_display(self):
         base_dir = config_manager.get_base_output_dir()
         self.lbl_base_info.setText(
-            f'📁 <b>Carpeta Base actual:</b> <a href="{base_dir}" style="color: #38bdf8; text-decoration: underline; font-weight: bold;">{base_dir}</a> '
+            f'<b>Carpeta Base actual:</b> <a href="{base_dir}" style="color: #38bdf8; text-decoration: underline; font-weight: bold;">{base_dir}</a> '
             f'<span style="color: #94a3b8; font-size: 11px;">(Haz clic para abrir)</span>'
         )
         config_manager.make_clickable_folder_label(self.lbl_base_info, config_manager.get_base_output_dir)
         use_base = self.chk_use_base.isChecked()
+        self.icon_base_dir.setVisible(use_base)
         self.lbl_base_info.setVisible(use_base)
         self.chk_subfolder.setVisible(use_base)
         self._update_output_suggestion()
@@ -455,10 +477,18 @@ class TabConcat(QWidget):
             # Cuadro informativo interactivo con opciones de abrir
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Videos Unidos")
-            msg_box.setText(f"{message}\n\n<b>Archivo resultante:</b>\n{out_path}")
+            msg_box.setTextFormat(Qt.RichText)
+            msg_box.setText(
+                f"<div style='font-size: 13px; line-height: 1.4;'>"
+                f"<p><b>{message}</b></p>"
+                f"<p><b>Archivo resultante:</b><br><span style='color: #38bdf8;'>{out_path}</span></p>"
+                f"</div>"
+            )
             msg_box.setIcon(QMessageBox.Information)
-            btn_play = msg_box.addButton("▶ Abrir Video", QMessageBox.ActionRole)
-            btn_folder = msg_box.addButton("📁 Abrir Carpeta", QMessageBox.ActionRole)
+            btn_play = msg_box.addButton("Abrir Video", QMessageBox.ActionRole)
+            btn_play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            btn_folder = msg_box.addButton("Abrir Carpeta", QMessageBox.ActionRole)
+            btn_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
             msg_box.addButton("Aceptar", QMessageBox.AcceptRole)
             msg_box.exec_()
 

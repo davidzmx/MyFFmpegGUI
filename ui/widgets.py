@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
-    QFileDialog, QLabel, QPlainTextEdit, QProgressBar, QApplication
+    QFileDialog, QLabel, QPlainTextEdit, QProgressBar, QApplication, QStyle
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
@@ -161,8 +161,15 @@ class LogConsole(QWidget):
         btn_clear.setFixedHeight(26)
         btn_clear.clicked.connect(self.clear_logs)
 
+        self.btn_toggle_height = QPushButton("↕ Expandir")
+        self.btn_toggle_height.setToolTip("Alternar entre altura compacta y expandida de la terminal")
+        self.btn_toggle_height.setFixedHeight(26)
+        self.btn_toggle_height.clicked.connect(self._toggle_height)
+        self._is_expanded = False
+
         header_layout.addWidget(header_lbl)
         header_layout.addStretch()
+        header_layout.addWidget(self.btn_toggle_height)
         header_layout.addWidget(btn_copy)
         header_layout.addWidget(btn_clear)
 
@@ -170,9 +177,20 @@ class LogConsole(QWidget):
         self.text_edit.setObjectName("log_console")
         self.text_edit.setReadOnly(True)
         self.text_edit.setMaximumBlockCount(1500)
+        self.text_edit.setMinimumHeight(45)
 
         layout.addLayout(header_layout)
         layout.addWidget(self.text_edit)
+
+    def _toggle_height(self):
+        self._is_expanded = not self._is_expanded
+        if self._is_expanded:
+            self.text_edit.setMinimumHeight(240)
+            self.btn_toggle_height.setText("↕ Reducir")
+        else:
+            self.text_edit.setMinimumHeight(45)
+            self.text_edit.setMaximumHeight(16777215)
+            self.btn_toggle_height.setText("↕ Expandir")
 
     def append_log(self, text: str):
         self.text_edit.appendPlainText(text)
@@ -338,11 +356,12 @@ class OutputActionsWidget(QWidget):
         layout.setContentsMargins(0, 4, 0, 4)
         layout.setSpacing(10)
 
-        self.lbl_status = QLabel("✅ Listo:")
+        self.lbl_status = QLabel("Listo:")
         self.lbl_status.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px;")
 
-        self.btn_open_file = QPushButton(f"▶ {file_label}")
+        self.btn_open_file = QPushButton(file_label)
         self.btn_open_file.setCursor(Qt.PointingHandCursor)
+        self.btn_open_file.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.btn_open_file.setStyleSheet("""
             QPushButton {
                 background-color: #065f46;
@@ -363,8 +382,9 @@ class OutputActionsWidget(QWidget):
         """)
         self.btn_open_file.clicked.connect(self._on_open_file)
 
-        self.btn_open_folder = QPushButton("📁 Abrir Carpeta Contenedora")
+        self.btn_open_folder = QPushButton("Abrir Carpeta Contenedora")
         self.btn_open_folder.setCursor(Qt.PointingHandCursor)
+        self.btn_open_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         self.btn_open_folder.setStyleSheet("""
             QPushButton {
                 background-color: #1e293b;
@@ -393,12 +413,14 @@ class OutputActionsWidget(QWidget):
 
         self.setVisible(False)
 
-    def show_output(self, path: str, is_folder_only: bool = False, custom_status: str = "✅ Proceso completado exitosamente:"):
+    def show_output(self, path: str, is_folder_only: bool = False, custom_status: str = "Proceso completado exitosamente:"):
         self.current_path = path
         self.is_folder_only = is_folder_only
-        self.lbl_status.setText(custom_status)
-        self.btn_open_file.setText(f"▶ {self.file_label}")
+        self.lbl_status.setText(f"{custom_status}")
+        self.btn_open_file.setText(self.file_label)
+        self.btn_open_file.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.btn_open_file.setVisible(not is_folder_only and os.path.isfile(path))
+        self.btn_open_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         self.btn_open_folder.setVisible(True)
         self.setVisible(True)
 

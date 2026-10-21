@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
-    QComboBox, QPushButton, QMessageBox, QCheckBox, QLineEdit, QDoubleSpinBox
+    QComboBox, QPushButton, QMessageBox, QCheckBox, QLineEdit, QDoubleSpinBox, QStyle
 )
 from ui.widgets import FileSelector, FolderSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
 import ffmpeg_core
@@ -117,9 +117,17 @@ class TabExtractFrames(QWidget):
         h_sub_opt.addStretch()
         layout_out.addLayout(h_sub_opt)
 
+        h_base = QHBoxLayout()
+        h_base.setContentsMargins(0, 0, 0, 0)
+        h_base.setSpacing(6)
+        self.icon_base_dir = QLabel()
+        self.icon_base_dir.setPixmap(self.style().standardIcon(QStyle.SP_DirIcon).pixmap(16, 16))
         self.lbl_base_info = QLabel()
         self.lbl_base_info.setStyleSheet("color: #38bdf8; font-size: 11px; padding: 2px 0px;")
-        layout_out.addWidget(self.lbl_base_info)
+        h_base.addWidget(self.icon_base_dir)
+        h_base.addWidget(self.lbl_base_info)
+        h_base.addStretch()
+        layout_out.addLayout(h_base)
 
         self.folder_selector = FolderSelector("Seleccione la carpeta donde se guardarán las imágenes...")
         self.folder_selector.folder_selected.connect(lambda _: self._update_command_preview())
@@ -197,11 +205,12 @@ class TabExtractFrames(QWidget):
     def update_base_dir_display(self):
         base_dir = config_manager.get_base_output_dir()
         self.lbl_base_info.setText(
-            f"📁 <b>Carpeta Base actual:</b> <a href='base' style='color: #38bdf8; text-decoration: underline;'>{base_dir}</a> "
+            f"<b>Carpeta Base actual:</b> <a href='base' style='color: #38bdf8; text-decoration: underline;'>{base_dir}</a> "
             f"<span style='color: #94a3b8; font-size: 10px;'>(clic para abrir)</span>"
         )
         config_manager.make_clickable_folder_label(self.lbl_base_info, config_manager.get_base_output_dir)
         use_base = self.chk_use_base.isChecked()
+        self.icon_base_dir.setVisible(use_base)
         self.lbl_base_info.setVisible(use_base)
         self.chk_subfolder.setVisible(use_base)
         self._update_folder_suggestion()
@@ -339,12 +348,19 @@ class TabExtractFrames(QWidget):
         self.btn_cancel.setEnabled(False)
 
         if success:
-            self.output_actions.show_output(out_path, is_folder_only=True, custom_status="✅ Fotogramas extraídos exitosamente:")
+            self.output_actions.show_output(out_path, is_folder_only=True, custom_status="Fotogramas extraídos exitosamente:")
             msg_box = QMessageBox(self)
             msg_box.setWindowTitle("Fotogramas Extraídos")
-            msg_box.setText(f"{message}\n\n<b>Carpeta destino:</b>\n{out_path}")
+            msg_box.setTextFormat(Qt.RichText)
+            msg_box.setText(
+                f"<div style='font-size: 13px; line-height: 1.4;'>"
+                f"<p><b>{message}</b></p>"
+                f"<p><b>Carpeta destino:</b><br><span style='color: #38bdf8;'>{out_path}</span></p>"
+                f"</div>"
+            )
             msg_box.setIcon(QMessageBox.Information)
-            btn_folder = msg_box.addButton("📁 Abrir Carpeta", QMessageBox.ActionRole)
+            btn_folder = msg_box.addButton("Abrir Carpeta", QMessageBox.ActionRole)
+            btn_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
             msg_box.addButton("Aceptar", QMessageBox.AcceptRole)
             msg_box.exec_()
 
