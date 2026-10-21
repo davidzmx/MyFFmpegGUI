@@ -85,6 +85,28 @@ def main():
             ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
         except Exception:
             pass
+    elif hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+        # En Linux/macOS, guardar estado original de la terminal para garantizar que
+        # el eco de teclado (ECHO) y el modo canónico (ICANON) siempre se restablezcan al salir.
+        orig_termios = None
+        try:
+            import termios
+            fd = sys.stdin.fileno()
+            orig_termios = termios.tcgetattr(fd)
+
+            def restore_terminal():
+                try:
+                    termios.tcsetattr(fd, termios.TCSANOW, orig_termios)
+                except Exception:
+                    try:
+                        os.system("stty sane 2>/dev/null")
+                    except Exception:
+                        pass
+
+            import atexit
+            atexit.register(restore_terminal)
+        except Exception:
+            pass
 
     # Habilitar soporte High DPI para pantallas 2K/4K en Windows y Linux
     if hasattr(Qt, "AA_EnableHighDpiScaling"):
@@ -133,8 +155,23 @@ def main():
     window = MainWindow(initial_tab=args.tab, initial_file=args.file_path)
     window.show()
 
-    sys.exit(app.exec_())
+    exit_code = 0
+    try:
+        exit_code = app.exec_()
+    finally:
+        if sys.platform != "win32" and hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+            try:
+                import termios
+                if 'orig_termios' in locals() and orig_termios is not None:
+                    termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, orig_termios)
+                else:
+                    os.system("stty sane 2>/dev/null")
+            except Exception:
+                pass
+
+    sys.exit(exit_code)
 
 
 if __name__ == "__main__":
     main()
+

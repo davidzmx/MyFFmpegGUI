@@ -84,6 +84,18 @@ if exist "bin\ffprobe.exe" (
     :found_port_ffprobe
 )
 
+if exist "bin\ffplay.exe" (
+    copy /y "bin\ffplay.exe" "%PORTABLE_DIR%\bin\" >nul
+) else if exist "ffplay.exe" (
+    copy /y "ffplay.exe" "%PORTABLE_DIR%\bin\" >nul
+) else (
+    where ffplay.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        for /f "delims=" %%F in ('where ffplay.exe') do copy /y "%%F" "%PORTABLE_DIR%\bin\ffplay.exe" >nul & goto :found_port_ffplay
+    )
+    :found_port_ffplay
+)
+
 :: 6. Copiar archivos auxiliares
 copy /y "README.md" "%PORTABLE_DIR%\" >nul 2>&1
 copy /y "instalar_menu_contextual_windows.reg" "%PORTABLE_DIR%\" >nul 2>&1

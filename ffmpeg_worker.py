@@ -54,10 +54,12 @@ class FFmpegWorker(QThread):
         self.output_path = output_path
         self._process: Optional[subprocess.Popen] = None
         self._is_cancelled = False
+        self.collected_logs: List[str] = []
 
     def run(self):
         """Ejecuta el subproceso FFmpeg y lee la salida de stderr línea por línea."""
         self._is_cancelled = False
+        self.collected_logs = []
         time_regex = re.compile(r"time=(\d{2}:\d{2}:\d{2}\.\d+)")
         speed_regex = re.compile(r"speed=\s*([\d\.]+x)")
         fps_regex = re.compile(r"fps=\s*([\d\.]+)")
@@ -101,6 +103,7 @@ class FFmpegWorker(QThread):
 
                 line_stripped = line.strip()
                 if line_stripped:
+                    self.collected_logs.append(line_stripped)
                     self.log_signal.emit(line_stripped)
                     # Guardar líneas informativas para diagnóstico en caso de error (excluir líneas periódicas de frame=)
                     if not line_stripped.startswith("frame=") and not line_stripped.startswith("size="):

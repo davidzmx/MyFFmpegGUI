@@ -68,6 +68,33 @@ def get_default_ffmpeg_paths() -> Tuple[Optional[str], Optional[str]]:
     return ffmpeg_path, ffprobe_path
 
 
+def get_ffplay_path(ffmpeg_path: str = None) -> Optional[str]:
+    """
+    Localiza el ejecutable ffplay correspondiente al ffmpeg configurado, en config o en PATH.
+    """
+    try:
+        import config_manager
+        cfg_p = config_manager.load_config().get("ffplay_path")
+        if cfg_p and os.path.isfile(cfg_p):
+            return cfg_p
+    except Exception:
+        pass
+
+    if ffmpeg_path:
+        parent_dir = Path(ffmpeg_path).resolve().parent
+        for candidate in ("ffplay.exe", "ffplay"):
+            target = parent_dir / candidate
+            if target.is_file():
+                return str(target)
+
+    for cmd in ("ffplay", "ffplay.exe"):
+        found = shutil.which(cmd)
+        if found and os.path.isfile(found):
+            return found
+
+    return None
+
+
 def get_ffmpeg_version(ffmpeg_path: str) -> str:
     """Obtiene la versión instalada de FFmpeg."""
     if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
@@ -80,6 +107,7 @@ def get_ffmpeg_version(ffmpeg_path: str) -> str:
 
         res = subprocess.run(
             [ffmpeg_path, "-version"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -149,6 +177,7 @@ def get_media_info(filepath: str, ffprobe_path: Optional[str] = None) -> Dict[st
         ]
         res = subprocess.run(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -593,3 +622,301 @@ def create_concat_list_file(file_paths: List[str], target_txt_path: str) -> str:
             clean_path = clean_path.replace("'", "'\\''")
             f.write(f"file '{clean_path}'\n")
     return target_txt_path
+
+
+def build_compare_video_command(
+    ffmpeg_path: str,
+    video_a: str,
+    video_b: str,
+    output_file: str,
+    mode: str = "split_screen",  # "split_screen", "side_by_side", "diff"
+    target_width: int = 1280,
+    target_height: int = 720
+) -> List[str]:
+    """
+    Construye el comando FFmpeg para generar un video de comparación visual entre dos videos.
+    - 'split_screen': Mitad izquierda video A, mitad derecha video B con línea divisoria central.
+    - 'side_by_side': Dos videos en paralelo lado a lado con etiquetas de identificación.
+    - 'diff': Mapa de diferencias (los píxeles idénticos se muestran en negro; los modificados en color).
+    """
+    cmd = [
+        ffmpeg_path, "-y",
+        "-i", video_a,
+        "-i", video_b
+    ]
+
+    w = target_width if target_width % 2 == 0 else target_width + 1
+    h = target_height if target_height % 2 == 0 else target_height + 1
+    w_half = w // 2
+
+    if mode == "side_by_side":
+        # Ambos videos lado a lado (cada uno escalado a w_half x h)
+        filter_str = (
+            f"[0:v]scale={w_half}:{h},drawtext=text='ORIGINAL (A)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[left]; "
+            f"[1:v]scale={w_half}:{h},drawtext=text='COMPARADO (B)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[right]; "
+            f"[left][right]hstack[vout]"
+        )
+    elif mode == "diff":
+        # Mapa de diferencias
+        filter_str = (
+            f"[0:v]scale={w}:{h}[v0s]; "
+            f"[1:v]scale={w}:{h}[v1s]; "
+            f"[v0s][v1s]blend=all_mode=difference[diff]; "
+            f"[diff]drawtext=text='MAPA DE DIFERENCIAS (Negro = Idéntico | Color = Pérdida o Cambio)':x=15:y=15:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6[vout]"
+        )
+    else:
+        # "split_screen" (predeterminado)
+        filter_str = (
+            f"[1:v]scale={w}:{h}[v1s]; "
+            f"[0:v]scale={w}:{h},crop={w_half}:{h}:0:0,drawtext=text='ORIGINAL (Izq)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[left]; "
+            f"[v1s]crop={w_half}:{h}:{w_half}:0,drawtext=text='COMPARADO (Der)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[right]; "
+            f"[left][right]hstack[split]; "
+            f"[split]drawbox=x={w_half - 1}:y=0:w=2:h={h}:color=yellow@0.9:t=fill[vout]"
+        )
+
+    cmd.extend([
+        "-filter_complex", filter_str,
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-crf", "17",
+        "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        output_file
+    ])
+    return cmd
+
+
+def build_compare_live_stream_command(
+    ffmpeg_path: str,
+    video_a: str,
+    video_b: str,
+    mode: str = "split_screen",
+    target_width: int = 1280,
+    target_height: int = 720
+) -> List[str]:
+    """
+    Construye el comando FFmpeg para emitir en directo (pipe NUT) la comparación
+    entre dos videos con decodificación inmediata sin escribir en disco.
+    """
+    w = target_width if target_width % 2 == 0 else target_width + 1
+    h = target_height if target_height % 2 == 0 else target_height + 1
+    w_half = w // 2
+
+    if mode == "side_by_side":
+        filter_str = (
+            f"[0:v]scale={w_half}:{h},drawtext=text='ORIGINAL (A)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[left]; "
+            f"[1:v]scale={w_half}:{h},drawtext=text='COMPARADO (B)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[right]; "
+            f"[left][right]hstack[vout]"
+        )
+    elif mode == "diff":
+        filter_str = (
+            f"[0:v]scale={w}:{h}[v0s]; "
+            f"[1:v]scale={w}:{h}[v1s]; "
+            f"[v0s][v1s]blend=all_mode=difference[diff]; "
+            f"[diff]drawtext=text='MAPA DE DIFERENCIAS (Negro = Idéntico | Color = Pérdida o Cambio)':x=15:y=15:fontsize=16:fontcolor=white:box=1:boxcolor=black@0.6[vout]"
+        )
+    else:
+        # split_screen
+        filter_str = (
+            f"[1:v]scale={w}:{h}[v1s]; "
+            f"[0:v]scale={w}:{h},crop={w_half}:{h}:0:0,drawtext=text='ORIGINAL (Izq)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[left]; "
+            f"[v1s]crop={w_half}:{h}:{w_half}:0,drawtext=text='COMPARADO (Der)':x=15:y=15:fontsize=18:fontcolor=white:box=1:boxcolor=black@0.6[right]; "
+            f"[left][right]hstack[split]; "
+            f"[split]drawbox=x={w_half - 1}:y=0:w=2:h={h}:color=yellow@0.9:t=fill[vout]"
+        )
+
+    return [
+        ffmpeg_path, "-y",
+        "-i", video_a,
+        "-i", video_b,
+        "-filter_complex", filter_str,
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "rawvideo",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "pcm_s16le",
+        "-f", "nut",
+        "-"
+    ]
+
+
+def build_ffplay_live_stream_command(
+    ffplay_path: str,
+    window_title: str = "Comparación Sincronizada en Tiempo Real"
+) -> List[str]:
+    """Construye el comando ffplay para leer desde stdin (-) el flujo de comparación en vivo."""
+    return [
+        ffplay_path,
+        "-window_title", window_title,
+        "-autoexit",
+        "-"
+    ]
+
+
+def build_ffplay_dual_window_commands(
+    ffplay_path: str,
+    video_a: str,
+    video_b: str,
+    screen_width: int = 1920,
+    screen_height: int = 1080,
+    screen_x: int = 0,
+    screen_y: int = 0
+) -> Tuple[List[str], List[str]]:
+    """
+    Construye dos comandos de ffplay posicionados geométricamente uno al lado del otro
+    (mitad izquierda y mitad derecha de la pantalla).
+    """
+    usable_w = screen_width
+    usable_h = screen_height
+    win_w = max(320, min(int(usable_w / 2) - 30, 960))
+    win_h = max(240, min(int(win_w * 9 / 16), usable_h - 100))
+
+    y_pos = screen_y + max(40, int((usable_h - win_h) / 2))
+    x_pos_a = screen_x + 15
+    x_pos_b = screen_x + int(usable_w / 2) + 10
+
+    name_a = Path(video_a).name
+    name_b = Path(video_b).name
+
+    cmd_a = [
+        ffplay_path,
+        "-window_title", f"Original (A): {name_a}",
+        "-x", str(win_w),
+        "-y", str(win_h),
+        "-left", str(x_pos_a),
+        "-top", str(y_pos),
+        "-autoexit",
+        video_a
+    ]
+
+    cmd_b = [
+        ffplay_path,
+        "-window_title", f"Comparado (B): {name_b}",
+        "-x", str(win_w),
+        "-y", str(win_h),
+        "-left", str(x_pos_b),
+        "-top", str(y_pos),
+        "-autoexit",
+        video_b
+    ]
+
+    return cmd_a, cmd_b
+
+
+def build_compare_metrics_command(
+    ffmpeg_path: str,
+    video_a: str,
+    video_b: str,
+    target_width: int = 1280,
+    target_height: int = 720
+) -> List[str]:
+    """
+    Construye el comando FFmpeg para calcular métricas objetivas de calidad (SSIM y PSNR)
+    entre el video original (referencia A) y el video procesado (B).
+    """
+    w = target_width if target_width % 2 == 0 else target_width + 1
+    h = target_height if target_height % 2 == 0 else target_height + 1
+
+    filter_graph = (
+        f"[0:v]scale={w}:{h},split=2[v0_s][v0_p];"
+        f"[1:v]scale={w}:{h},split=2[v1_s][v1_p];"
+        f"[v0_s][v1_s]ssim[sout];"
+        f"[v0_p][v1_p]psnr[pout]"
+    )
+
+    return [
+        ffmpeg_path, "-y",
+        "-i", video_b,
+        "-i", video_a,
+        "-filter_complex", filter_graph,
+        "-map", "[sout]", "-f", "null", "-",
+        "-map", "[pout]", "-f", "null", "-"
+    ]
+
+
+def parse_comparison_metrics(stderr_text) -> Dict[str, Any]:
+    """
+    Analiza la salida de FFmpeg para extraer los valores de SSIM y PSNR.
+    Devuelve puntuaciones cuantitativas y veredicto cualitativo con código de color.
+    """
+    if isinstance(stderr_text, (list, tuple)):
+        stderr_text = "\n".join(str(l) for l in stderr_text)
+    elif not isinstance(stderr_text, str):
+        stderr_text = str(stderr_text or "")
+
+    res = {
+        "ssim": None,
+        "psnr": None,
+        "ssim_str": "N/D",
+        "psnr_str": "N/D",
+        "rating": "No se pudieron calcular métricas",
+        "rating_color": "#94a3b8",
+        "detail": ""
+    }
+
+    # SSIM All:0.984210
+    ssim_match = re.search(r'SSIM\s+.*?All:([0-9.]+|inf)', stderr_text, re.IGNORECASE)
+    if ssim_match:
+        try:
+            raw = ssim_match.group(1).lower()
+            if raw == "inf":
+                res["ssim"] = 1.0
+                res["ssim_str"] = "1.0000 (Exacto)"
+            else:
+                val = float(raw)
+                res["ssim"] = val
+                res["ssim_str"] = f"{val:.4f}"
+        except Exception:
+            pass
+
+    # PSNR average:42.510000
+    psnr_match = re.search(r'PSNR\s+.*?average:([0-9.]+|inf)', stderr_text, re.IGNORECASE)
+    if psnr_match:
+        try:
+            raw = psnr_match.group(1).lower()
+            if raw == "inf":
+                res["psnr"] = 999.0
+                res["psnr_str"] = "∞ dB (Sin pérdida)"
+            else:
+                val = float(raw)
+                res["psnr"] = val
+                res["psnr_str"] = f"{val:.2f} dB"
+        except Exception:
+            pass
+
+    ssim_val = res["ssim"]
+    psnr_val = res["psnr"]
+
+    if ssim_val is not None:
+        if ssim_val >= 0.98 or (psnr_val and psnr_val >= 42.0):
+            res["rating"] = "Excelente (Fidelidad visual indistinguible del original)"
+            res["rating_color"] = "#10b981"
+            res["detail"] = "La compresión conserva prácticamente el 100% de la textura y detalle del video original."
+        elif ssim_val >= 0.95 or (psnr_val and psnr_val >= 37.0):
+            res["rating"] = "Muy Buena (Fidelidad visual alta)"
+            res["rating_color"] = "#38bdf8"
+            res["detail"] = "Diferencias casi imperceptibles a distancia de reproducción normal."
+        elif ssim_val >= 0.90 or (psnr_val and psnr_val >= 32.0):
+            res["rating"] = "Aceptable / Buena (Pérdida moderada)"
+            res["rating_color"] = "#f59e0b"
+            res["detail"] = "Pérdida perceptible en escenas de movimiento rápido o gradientes sutiles."
+        else:
+            res["rating"] = "Pérdida Notoria de Calidad"
+            res["rating_color"] = "#ef4444"
+            res["detail"] = "Artefactos de compresión o reducción evidente de resolución y nitidez."
+    elif psnr_val is not None:
+        if psnr_val >= 40.0:
+            res["rating"] = "Excelente Fidelidad (PSNR > 40 dB)"
+            res["rating_color"] = "#10b981"
+        elif psnr_val >= 32.0:
+            res["rating"] = "Buena Fidelidad (PSNR > 32 dB)"
+            res["rating_color"] = "#38bdf8"
+        else:
+            res["rating"] = "Calidad Reducida"
+            res["rating_color"] = "#ef4444"
+
+    return res

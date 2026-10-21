@@ -69,6 +69,14 @@ if not exist "bin\ffprobe.exe" (
     )
     :found_ffprobe
 )
+if not exist "bin\ffplay.exe" (
+    where ffplay.exe >nul 2>&1
+    if !errorlevel! equ 0 (
+        mkdir bin 2>nul
+        for /f "delims=" %%F in ('where ffplay.exe') do copy /y "%%F" "bin\ffplay.exe" >nul & goto :found_ffplay
+    )
+    :found_ffplay
+)
 
 echo [OK] Compilacion completada con exito en dist\MyFFmpegGUI\
 echo.

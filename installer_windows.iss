@@ -47,6 +47,7 @@ Source: "assets\*"; DestDir: "{app}\assets"; Flags: ignoreversion recursesubdirs
 ; Binarios de FFmpeg si están incluidos en bin\ (opcional)
 Source: "bin\ffmpeg.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "bin\ffprobe.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "bin\ffplay.exe"; DestDir: "{app}\bin"; Flags: ignoreversion skipifsourcedoesntexist
 
 ; Archivos auxiliares de registro
 Source: "instalar_menu_contextual_windows.reg"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist

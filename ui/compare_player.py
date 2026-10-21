@@ -1,0 +1,1219 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Reproductor Comparativo de Video (En una sola ventana)
+Permite inspección visual interactiva de dos videos en paralelo con:
+- Modo Pantalla Dividida (Split Screen) con cortina/divisor arrastrable por el usuario.
+- Modo Lado a Lado (Side-by-Side).
+- Controles completos de reproducción (Play/Pausa, Línea de tiempo, Avance cuadro a cuadro).
+- Sincronización exacta fotograma a fotograma mediante decodificación FFmpeg integrada.
+"""
+
+import os
+import sys
+import time
+import subprocess
+from typing import Optional, Tuple
+
+from PyQt5.QtWidgets import (
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
+    QSlider, QComboBox, QFrame, QStyle, QShortcut, QSizePolicy, QToolTip
+)
+from PyQt5.QtGui import (
+    QPainter, QImage, QColor, QPen, QBrush, QFont, QKeySequence,
+    QCursor, QPolygon, QLinearGradient, QPixmap, QIcon, QPainterPath, QPolygonF
+)
+from PyQt5.QtCore import (
+    Qt, QRect, QPoint, QSize, QThread, pyqtSignal, QTimer, QMutex, QWaitCondition, QPointF
+)
+
+from ffmpeg_core import get_media_info, get_default_ffmpeg_paths, get_ffplay_path
+from ui.styles import ARROW_DOWN_URL, ARROW_DOWN_HOVER_URL
+
+
+def format_timestamp(seconds: float) -> str:
+    """Formatea segundos a formato HH:MM:SS o MM:SS."""
+    if seconds < 0:
+        seconds = 0
+    s = int(seconds)
+    hours = s // 3600
+    minutes = (s % 3600) // 60
+    secs = s % 60
+    if hours > 0:
+        return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def create_volume_icon(muted: bool = False, color: str = "#f8fafc", size: int = 22) -> QIcon:
+    """Genera un icono vectorial de volumen de alto contraste nítido y adaptable."""
+    pix = QPixmap(size, size)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+
+    path = QPainterPath()
+    path.addRect(2.5, 7.5, 3.5, 7.0)
+    poly = QPolygonF([QPointF(6.0, 7.5), QPointF(11.5, 3.5), QPointF(11.5, 18.5), QPointF(6.0, 14.5)])
+    path.addPolygon(poly)
+    painter.fillPath(path, QColor(color))
+
+    if muted:
+        pen = QPen(QColor("#ef4444"), 2.0, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        painter.drawLine(4, 4, 18, 18)
+    else:
+        pen = QPen(QColor(color), 1.6, Qt.SolidLine, Qt.RoundCap)
+        painter.setPen(pen)
+        painter.drawArc(10, 6, 5, 10, -55 * 16, 110 * 16)
+        painter.drawArc(11, 3, 8, 16, -55 * 16, 110 * 16)
+
+    painter.end()
+    return QIcon(pix)
+
+
+def create_fullscreen_icon(is_fullscreen: bool = False, color: QColor = QColor("#f8fafc")) -> QIcon:
+    """Genera un icono vectorial de pantalla completa nítido y de alto contraste."""
+    pix = QPixmap(24, 24)
+    pix.fill(Qt.transparent)
+    painter = QPainter(pix)
+    painter.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(color, 2, Qt.SolidLine, Qt.SquareCap, Qt.MiterJoin)
+    painter.setPen(pen)
+
+    if not is_fullscreen:
+        # Cuatro esquinas expandiéndose hacia afuera: ⛶
+        painter.drawLine(4, 9, 4, 4)
+        painter.drawLine(4, 4, 9, 4)
+        painter.drawLine(15, 4, 20, 4)
+        painter.drawLine(20, 4, 20, 9)
+        painter.drawLine(4, 15, 4, 20)
+        painter.drawLine(4, 20, 9, 20)
+        painter.drawLine(15, 20, 20, 20)
+        painter.drawLine(20, 20, 20, 15)
+    else:
+        # Cuatro esquinas contrayéndose hacia adentro: restaurar
+        painter.drawLine(8, 4, 8, 8)
+        painter.drawLine(8, 8, 4, 8)
+        painter.drawLine(16, 4, 16, 8)
+        painter.drawLine(16, 8, 20, 8)
+        painter.drawLine(8, 20, 8, 16)
+        painter.drawLine(8, 16, 4, 16)
+        painter.drawLine(16, 20, 16, 16)
+        painter.drawLine(16, 16, 20, 16)
+
+    painter.end()
+    return QIcon(pix)
+
+
+class ClickableSlider(QSlider):
+    """QSlider que salta inmediatamente a la posición donde el usuario hace clic."""
+    clicked_value = pyqtSignal(int)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            if self.orientation() == Qt.Horizontal:
+                val = self.minimum() + ((self.maximum() - self.minimum()) * event.x()) / max(1, self.width())
+            else:
+                val = self.maximum() - ((self.maximum() - self.minimum()) * event.y()) / max(1, self.height())
+            val = max(self.minimum(), min(self.maximum(), int(val)))
+            self.setValue(val)
+            self.clicked_value.emit(val)
+        super().mousePressEvent(event)
+
+
+class CompareVideoCanvas(QWidget):
+    """
+    Lienzo interactivo de visualización comparativa:
+    - Modo 'split': Superposición con línea divisoria arrastrable con el ratón.
+    - Modo 'side_by_side': Visualización lado a lado.
+    """
+    divider_moved = pyqtSignal(float)  # Ratio de división (0.0 a 1.0)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMouseTracking(True)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.setMinimumSize(480, 270)
+
+        self.image_a: Optional[QImage] = None
+        self.image_b: Optional[QImage] = None
+        self.mode: str = "split"  # 'split' o 'side_by_side'
+        self.split_ratio: float = 0.5  # Divisor en el 50%
+        self.dragging_divider: bool = False
+        self.show_labels: bool = True
+        self.label_a: str = "Original (A)"
+        self.label_b: str = "Procesado (B)"
+
+        # Rectángulo de dibujo del video dentro del widget (preservando aspecto)
+        self.video_rect: QRect = QRect()
+
+    def set_images(self, img_a: Optional[QImage], img_b: Optional[QImage]):
+        self.image_a = img_a
+        self.image_b = img_b
+        self.update()
+
+    def set_mode(self, mode: str):
+        if mode in ("split", "side_by_side"):
+            self.mode = mode
+            self.update()
+
+    def set_split_ratio(self, ratio: float):
+        self.split_ratio = max(0.02, min(0.98, ratio))
+        self.update()
+
+    def _get_divider_x(self) -> int:
+        if self.video_rect.isEmpty():
+            return int(self.width() * self.split_ratio)
+        return int(self.video_rect.x() + self.video_rect.width() * self.split_ratio)
+
+    def mousePressEvent(self, event):
+        if self.mode == "split" and event.button() == Qt.LeftButton:
+            x = event.pos().x()
+            # Si el clic ocurre en el área de video, ajustamos la cortina directamente
+            if not self.video_rect.isEmpty():
+                ratio = (x - self.video_rect.x()) / max(1, self.video_rect.width())
+            else:
+                ratio = x / max(1, self.width())
+            self.split_ratio = max(0.02, min(0.98, ratio))
+            self.dragging_divider = True
+            self.setCursor(Qt.SplitHCursor)
+            self.divider_moved.emit(self.split_ratio)
+            self.update()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self.mode == "split":
+            x = event.pos().x()
+            div_x = self._get_divider_x()
+            if self.dragging_divider:
+                if not self.video_rect.isEmpty():
+                    ratio = (x - self.video_rect.x()) / max(1, self.video_rect.width())
+                else:
+                    ratio = x / max(1, self.width())
+                self.split_ratio = max(0.02, min(0.98, ratio))
+                self.divider_moved.emit(self.split_ratio)
+                self.update()
+            else:
+                # Comprobar si el cursor está cerca de la línea divisoria (15px)
+                if abs(x - div_x) <= 15:
+                    self.setCursor(Qt.SplitHCursor)
+                else:
+                    self.setCursor(Qt.ArrowCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.dragging_divider = False
+            self.setCursor(Qt.ArrowCursor)
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            top_level = self.window()
+            if hasattr(top_level, "_toggle_fullscreen"):
+                top_level._toggle_fullscreen()
+        super().mouseDoubleClickEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+
+        # Fondo negro de cine
+        painter.fillRect(self.rect(), QColor("#090d16"))
+
+        if self.image_a is None and self.image_b is None:
+            painter.setPen(QColor("#64748b"))
+            painter.setFont(QFont("Segoe UI", 12))
+            painter.drawText(self.rect(), Qt.AlignCenter, "Cargando fotogramas de video...")
+            return
+
+        w_widget = self.width()
+        h_widget = self.height()
+
+        # Determinar dimensiones de video para mantener relación de aspecto
+        sample_img = self.image_a if self.image_a is not None else self.image_b
+        vw = sample_img.width() if sample_img else 16
+        vh = sample_img.height() if sample_img else 9
+        if vw <= 0 or vh <= 0:
+            vw, vh = 16, 9
+
+        if self.mode == "split":
+            # Calcular rect manteniendo aspecto centrado en el widget
+            aspect = vw / vh
+            target_w = w_widget
+            target_h = int(target_w / aspect)
+            if target_h > h_widget:
+                target_h = h_widget
+                target_w = int(target_h * aspect)
+            target_x = (w_widget - target_w) // 2
+            target_y = (h_widget - target_h) // 2
+            self.video_rect = QRect(target_x, target_y, target_w, target_h)
+
+            div_x = int(target_x + target_w * self.split_ratio)
+
+            # Dibujar Video A en el lado izquierdo recortado
+            if self.image_a:
+                painter.save()
+                clip_left = QRect(target_x, target_y, div_x - target_x, target_h)
+                painter.setClipRect(clip_left)
+                painter.drawImage(self.video_rect, self.image_a)
+                painter.restore()
+
+            # Dibujar Video B en el lado derecho recortado
+            if self.image_b:
+                painter.save()
+                clip_right = QRect(div_x, target_y, (target_x + target_w) - div_x, target_h)
+                painter.setClipRect(clip_right)
+                painter.drawImage(self.video_rect, self.image_b)
+                painter.restore()
+
+            # Dibujar Línea divisoria elegante (azul brillante con borde oscuro)
+            painter.save()
+            pen_shadow = QPen(QColor(0, 0, 0, 180), 4)
+            painter.setPen(pen_shadow)
+            painter.drawLine(div_x, target_y, div_x, target_y + target_h)
+
+            pen_line = QPen(QColor("#38bdf8"), 2)
+            painter.setPen(pen_line)
+            painter.drawLine(div_x, target_y, div_x, target_y + target_h)
+
+            # Manija central circular con flechas (< | >)
+            center_y = target_y + target_h // 2
+            radius = 16
+            painter.setBrush(QBrush(QColor("#0284c7")))
+            painter.setPen(QPen(QColor("#ffffff"), 2))
+            painter.drawEllipse(QPoint(div_x, center_y), radius, radius)
+
+            # Icono de flechas dentro de la manija
+            painter.setPen(QColor("#ffffff"))
+            painter.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            painter.drawText(QRect(div_x - 14, center_y - 12, 28, 24), Qt.AlignCenter, "◂ ▸")
+            painter.restore()
+
+            # Etiquetas flotantes discretas ("Original" y "Procesado")
+            if self.show_labels:
+                self._draw_pill_badge(painter, target_x + 12, target_y + 12, self.label_a, "#2563eb")
+                self._draw_pill_badge(painter, target_x + target_w - 110, target_y + 12, self.label_b, "#7c3aed")
+
+        elif self.mode == "side_by_side":
+            # Dividir el widget en dos mitades horizontales
+            half_w = w_widget // 2
+            aspect = vw / vh
+
+            # Calcular tamaño de video para cada mitad
+            target_w = half_w - 4
+            target_h = int(target_w / aspect)
+            if target_h > h_widget:
+                target_h = h_widget
+                target_w = int(target_h * aspect)
+
+            target_y = (h_widget - target_h) // 2
+
+            # Mitad Izquierda (Video A)
+            rect_a = QRect((half_w - target_w) // 2, target_y, target_w, target_h)
+            if self.image_a:
+                painter.drawImage(rect_a, self.image_a)
+            self._draw_pill_badge(painter, rect_a.x() + 8, rect_a.y() + 8, self.label_a, "#2563eb")
+
+            # Mitad Derecha (Video B)
+            rect_b = QRect(half_w + (half_w - target_w) // 2, target_y, target_w, target_h)
+            if self.image_b:
+                painter.drawImage(rect_b, self.image_b)
+            self._draw_pill_badge(painter, rect_b.x() + 8, rect_b.y() + 8, self.label_b, "#7c3aed")
+
+            # Línea divisoria central
+            painter.setPen(QPen(QColor("#334155"), 2))
+            painter.drawLine(half_w, 0, half_w, h_widget)
+
+            self.video_rect = QRect(0, 0, w_widget, h_widget)
+
+    def _draw_pill_badge(self, painter: QPainter, x: int, y: int, text: str, accent_color: str):
+        """Dibuja una etiqueta redondeada semi-transparente para identificar los videos."""
+        painter.save()
+        font = QFont("Segoe UI", 9, QFont.Bold)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        text_w = metrics.horizontalAdvance(text) + 20
+        text_h = 24
+
+        badge_rect = QRect(x, y, text_w, text_h)
+        painter.setBrush(QBrush(QColor(15, 23, 42, 210)))
+        painter.setPen(QPen(QColor(accent_color), 1.5))
+        painter.drawRoundedRect(badge_rect, 12, 12)
+
+        painter.setPen(QColor("#f8fafc"))
+        painter.drawText(badge_rect, Qt.AlignCenter, text)
+        painter.restore()
+
+
+class ComparePlaybackWorker(QThread):
+    """
+    Hilo de trabajo para decodificación y reproducción sincronizada de dos videos:
+    - Utiliza FFmpeg con vstack para garantizar sincronización perfecta de fotogramas en memoria.
+    - Soporta búsqueda directa (seek), reproducción continua con control de velocidad y audio opcional.
+    """
+    frame_ready = pyqtSignal(object, object, float)  # img_a, img_b, timestamp
+    time_updated = pyqtSignal(float)
+    state_changed = pyqtSignal(bool)  # is_playing
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        ffmpeg_path: str,
+        video_a: str,
+        video_b: str,
+        duration: float,
+        fps: float = 30.0,
+        render_w: int = 960,
+        render_h: int = 540,
+        parent=None
+    ):
+        super().__init__(parent)
+        self.ffmpeg_path = ffmpeg_path
+        self.video_a = video_a
+        self.video_b = video_b
+        self.duration = max(0.1, duration)
+        self.fps = max(1.0, min(60.0, fps if fps > 0 else 30.0))
+        self.render_w = render_w if render_w % 2 == 0 else render_w + 1
+        self.render_h = render_h if render_h % 2 == 0 else render_h + 1
+
+        self._is_running = True
+        self._is_playing = False
+        self._current_time = 0.0
+        self._speed = 1.0
+        self._seek_requested: Optional[float] = None
+        self._audio_source: str = "none"  # "none", "a", "b"
+        self._volume: int = 100
+
+        self._process: Optional[subprocess.Popen] = None
+        self._audio_proc: Optional[subprocess.Popen] = None
+        self._ffplay_path = get_ffplay_path(self.ffmpeg_path)
+
+        self._mutex = QMutex()
+        self._condition = QWaitCondition()
+
+    def play(self):
+        self._mutex.lock()
+        self._is_playing = True
+        self._condition.wakeAll()
+        self._mutex.unlock()
+        self.state_changed.emit(True)
+
+    def pause(self):
+        self._mutex.lock()
+        self._is_playing = False
+        self._stop_audio()
+        self._mutex.unlock()
+        self.state_changed.emit(False)
+
+    def toggle_play(self):
+        if self._is_playing:
+            self.pause()
+        else:
+            self.play()
+
+    def seek(self, target_sec: float):
+        self._mutex.lock()
+        self._seek_requested = max(0.0, min(self.duration, target_sec))
+        self._condition.wakeAll()
+        self._mutex.unlock()
+
+    def step(self, delta_sec: float):
+        self._mutex.lock()
+        target = max(0.0, min(self.duration, self._current_time + delta_sec))
+        self._seek_requested = target
+        self._is_playing = False
+        self._stop_audio()
+        self._condition.wakeAll()
+        self._mutex.unlock()
+        self.state_changed.emit(False)
+
+    def set_speed(self, speed: float):
+        self._mutex.lock()
+        self._speed = max(0.25, min(4.0, speed))
+        self._mutex.unlock()
+
+    def set_audio_source(self, source: str):
+        self._mutex.lock()
+        self._audio_source = source
+        if not self._is_playing or source == "none":
+            self._stop_audio()
+        else:
+            self._restart_audio(self._current_time)
+        self._mutex.unlock()
+
+    def set_volume(self, volume: int):
+        self._mutex.lock()
+        self._volume = max(0, min(100, int(volume)))
+        need_restart = self._is_playing and self._audio_source != "none"
+        cur_time = self._current_time
+        self._mutex.unlock()
+        if need_restart:
+            self._restart_audio(cur_time)
+
+    def stop(self):
+        self._mutex.lock()
+        self._is_running = False
+        self._is_playing = False
+        self._condition.wakeAll()
+        self._mutex.unlock()
+        self._kill_process()
+        self._stop_audio()
+        if not self.wait(1000):
+            try:
+                self.terminate()
+                self.wait(500)
+            except Exception:
+                pass
+
+    def _start_stream(self, start_time: float) -> Optional[subprocess.Popen]:
+        """Inicia el proceso FFmpeg con vstack a partir de start_time."""
+        self._kill_process()
+
+        w, h = self.render_w, self.render_h
+        filter_complex = f"[0:v]scale={w}:{h}[v0];[1:v]scale={w}:{h}[v1];[v0][v1]vstack"
+
+        startupinfo = None
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+        cmd = [
+            self.ffmpeg_path,
+            "-ss", f"{start_time:.3f}",
+            "-i", self.video_a,
+            "-ss", f"{start_time:.3f}",
+            "-i", self.video_b,
+            "-filter_complex", filter_complex,
+            "-f", "image2pipe",
+            "-vcodec", "rawvideo",
+            "-pix_fmt", "rgb24",
+            "-r", f"{self.fps:.2f}",
+            "-"
+        ]
+
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags,
+                bufsize=w * h * 2 * 3 * 2
+            )
+            return proc
+        except Exception as e:
+            self.error.emit(f"Error al iniciar decodificación FFmpeg: {e}")
+            return None
+
+    def _kill_process(self):
+        if self._process:
+            try:
+                self._process.terminate()
+                self._process.kill()
+                self._process.wait(timeout=0.2)
+            except Exception:
+                pass
+            self._process = None
+
+    def _restart_audio(self, start_time: float):
+        self._stop_audio()
+        if not self._ffplay_path or self._audio_source == "none":
+            return
+
+        audio_file = self.video_a if self._audio_source == "a" else self.video_b
+        if not os.path.isfile(audio_file):
+            return
+
+        startupinfo = None
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+        cmd = [
+            self._ffplay_path,
+            "-nodisp",
+            "-autoexit",
+            "-volume", str(int(self._volume)),
+            "-ss", f"{start_time:.3f}",
+            audio_file
+        ]
+        try:
+            self._audio_proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
+                creationflags=creationflags
+            )
+        except Exception:
+            pass
+
+    def _stop_audio(self):
+        if self._audio_proc:
+            try:
+                self._audio_proc.terminate()
+                self._audio_proc.kill()
+                self._audio_proc.wait(timeout=0.2)
+            except Exception:
+                pass
+            self._audio_proc = None
+
+    def run(self):
+        w, h = self.render_w, self.render_h
+        frame_bytes_single = w * h * 3
+        frame_bytes_total = frame_bytes_single * 2
+
+        # Cargar fotograma inicial en 0.0s
+        self._process = self._start_stream(0.0)
+        if self._process and self._process.stdout:
+            data = self._process.stdout.read(frame_bytes_total)
+            if len(data) == frame_bytes_total:
+                img_a = QImage(data[:frame_bytes_single], w, h, w * 3, QImage.Format_RGB888).copy()
+                img_b = QImage(data[frame_bytes_single:], w, h, w * 3, QImage.Format_RGB888).copy()
+                self.frame_ready.emit(img_a, img_b, 0.0)
+
+        while self._is_running:
+            # 1. Comprobar si se solicitó un seek
+            target_seek = None
+            self._mutex.lock()
+            if self._seek_requested is not None:
+                target_seek = self._seek_requested
+                self._seek_requested = None
+            self._mutex.unlock()
+
+            if target_seek is not None:
+                self._current_time = target_seek
+                self._process = self._start_stream(target_seek)
+                if self._process and self._process.stdout:
+                    data = self._process.stdout.read(frame_bytes_total)
+                    if len(data) == frame_bytes_total:
+                        img_a = QImage(data[:frame_bytes_single], w, h, w * 3, QImage.Format_RGB888).copy()
+                        img_b = QImage(data[frame_bytes_single:], w, h, w * 3, QImage.Format_RGB888).copy()
+                        self.frame_ready.emit(img_a, img_b, target_seek)
+                        self.time_updated.emit(target_seek)
+
+                if self._is_playing:
+                    self._restart_audio(target_seek)
+                else:
+                    self._stop_audio()
+
+            # 2. Comprobar estado de reproducción
+            self._mutex.lock()
+            playing = self._is_playing
+            speed = self._speed
+            self._mutex.unlock()
+
+            if not playing:
+                # Si está en pausa, esperar a que se solicite acción
+                self._mutex.lock()
+                if self._is_running and not self._is_playing and self._seek_requested is None:
+                    self._condition.wait(self._mutex, 60)
+                self._mutex.unlock()
+                continue
+
+            # 3. Leer siguiente fotograma del flujo continuo
+            if self._process is None or self._process.stdout is None:
+                self._process = self._start_stream(self._current_time)
+                if self._is_playing:
+                    self._restart_audio(self._current_time)
+
+            frame_interval = 1.0 / (self.fps * speed)
+            t_start = time.time()
+
+            data = self._process.stdout.read(frame_bytes_total)
+            if len(data) < frame_bytes_total:
+                # Fin del video
+                self._is_playing = False
+                self._stop_audio()
+                self.state_changed.emit(False)
+                self.finished.emit()
+                continue
+
+            # Separar fotogramas de A y B
+            img_a = QImage(data[:frame_bytes_single], w, h, w * 3, QImage.Format_RGB888).copy()
+            img_b = QImage(data[frame_bytes_single:], w, h, w * 3, QImage.Format_RGB888).copy()
+
+            self._current_time += 1.0 / self.fps
+            if self._current_time > self.duration:
+                self._current_time = self.duration
+
+            self.frame_ready.emit(img_a, img_b, self._current_time)
+            self.time_updated.emit(self._current_time)
+
+            elapsed = time.time() - t_start
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0.002:
+                time.sleep(sleep_time)
+
+        self._kill_process()
+        self._stop_audio()
+
+
+class VideoComparePlayerDialog(QDialog):
+    """
+    Ventana del Reproductor Comparativo de Video (En una sola ventana, siempre).
+    Permite alternar entre Pantalla Dividida y Lado a Lado, mover la cortina divisoria y controlar la reproducción.
+    """
+    def __init__(self, parent=None, video_a: str = "", video_b: str = "", ffmpeg_path: Optional[str] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Reproductor Comparativo de Video - [Sincronizado]")
+        self.setMinimumSize(920, 600)
+        self.resize(1120, 720)
+
+        self.video_a = video_a
+        self.video_b = video_b
+        if not ffmpeg_path:
+            ffmpeg_path, _ = get_default_ffmpeg_paths()
+        self.ffmpeg_path = ffmpeg_path or "ffmpeg"
+
+        # Obtener metadatos de los videos
+        self.info_a = get_media_info(self.video_a)
+        self.info_b = get_media_info(self.video_b)
+        self.duration = max(self.info_a.get("duration", 0.0), self.info_b.get("duration", 0.0), 1.0)
+        self.fps = self.info_a.get("fps", 0.0) or self.info_b.get("fps", 0.0) or 30.0
+
+        self.is_seeking = False
+        self._unmuted_volume = 100
+        self._init_ui()
+        self._init_shortcuts()
+        self._init_worker()
+
+    def _init_ui(self):
+        self.vol_timer = QTimer(self)
+        self.vol_timer.setSingleShot(True)
+        self.vol_timer.setInterval(100)
+        self.vol_timer.timeout.connect(self._apply_volume_to_worker)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        # 1. Barra Superior con nombres de archivo e información técnica
+        h_top = QHBoxLayout()
+        h_top.setSpacing(10)
+
+        name_a = os.path.basename(self.video_a)
+        name_b = os.path.basename(self.video_b)
+
+        lbl_a = QLabel(f"<b>A (Original):</b> {name_a}")
+        lbl_a.setStyleSheet("color: #60a5fa; font-size: 12px;")
+        h_top.addWidget(lbl_a)
+
+        lbl_sep = QLabel("vs")
+        lbl_sep.setStyleSheet("color: #94a3b8; font-weight: bold;")
+        h_top.addWidget(lbl_sep)
+
+        lbl_b = QLabel(f"<b>B (Procesado):</b> {name_b}")
+        lbl_b.setStyleSheet("color: #c084fc; font-size: 12px;")
+        h_top.addWidget(lbl_b)
+
+        h_top.addStretch()
+
+        res_str = f"{self.info_a.get('width', 0)}x{self.info_a.get('height', 0)} ({self.fps:.1f} fps)"
+        lbl_tech = QLabel(res_str)
+        lbl_tech.setStyleSheet("color: #94a3b8; font-size: 11px; background: #1e293b; padding: 2px 8px; border-radius: 4px;")
+        h_top.addWidget(lbl_tech)
+
+        layout.addLayout(h_top)
+
+        # 2. Lienzo de Video
+        self.canvas = CompareVideoCanvas(self)
+        self.canvas.label_a = "Original (A)"
+        self.canvas.label_b = "Procesado (B)"
+        self.canvas.divider_moved.connect(self._on_divider_moved)
+        layout.addWidget(self.canvas, stretch=1)
+
+        # 3. Línea de tiempo interactiva (Seek Bar)
+        h_timeline = QHBoxLayout()
+        h_timeline.setSpacing(8)
+
+        self.lbl_time_cur = QLabel("00:00")
+        self.lbl_time_cur.setStyleSheet("color: #f8fafc; font-family: monospace; font-size: 12px; font-weight: bold;")
+        h_timeline.addWidget(self.lbl_time_cur)
+
+        self.slider_time = ClickableSlider(Qt.Horizontal, self)
+        self.slider_time.setRange(0, int(self.duration * 100))  # Precisión de centésimas
+        self.slider_time.setValue(0)
+        self.slider_time.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 6px;
+                background: #334155;
+                border-radius: 3px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #3b82f6;
+                border-radius: 3px;
+            }
+            QSlider::handle:horizontal {
+                background: #60a5fa;
+                border: 2px solid #ffffff;
+                width: 14px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 7px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #93c5fd;
+            }
+        """)
+        self.slider_time.sliderPressed.connect(self._on_slider_pressed)
+        self.slider_time.sliderMoved.connect(self._on_slider_moved)
+        self.slider_time.sliderReleased.connect(self._on_slider_released)
+        self.slider_time.clicked_value.connect(self._on_slider_clicked)
+        h_timeline.addWidget(self.slider_time, stretch=1)
+
+        self.lbl_time_total = QLabel(format_timestamp(self.duration))
+        self.lbl_time_total.setStyleSheet("color: #94a3b8; font-family: monospace; font-size: 12px;")
+        h_timeline.addWidget(self.lbl_time_total)
+
+        layout.addLayout(h_timeline)
+
+        # 4. Barra Inferior de Controles
+        h_controls = QHBoxLayout()
+        h_controls.setSpacing(7)
+
+        # Botón Retroceder 1 segundo
+        self.btn_step_back = QPushButton(self)
+        self.btn_step_back.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekBackward))
+        self.btn_step_back.setToolTip("Retroceder 1 segundo (Flecha Izquierda)")
+        self.btn_step_back.clicked.connect(lambda: self.worker.step(-1.0))
+        h_controls.addWidget(self.btn_step_back)
+
+        # Botón Play / Pausa
+        self.btn_play = QPushButton("Reproducir", self)
+        self.btn_play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.btn_play.setMinimumWidth(105)
+        self.btn_play.setStyleSheet(
+            "font-weight: bold; font-size: 12px; padding: 6px 10px; "
+            "background-color: #2563eb; color: white; border-radius: 6px;"
+        )
+        self.btn_play.setToolTip("Reproducir / Pausar (Barra Espaciadora)")
+        self.btn_play.clicked.connect(self._on_toggle_play)
+        h_controls.addWidget(self.btn_play)
+
+        # Botón Avanzar 1 segundo
+        self.btn_step_fwd = QPushButton(self)
+        self.btn_step_fwd.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekForward))
+        self.btn_step_fwd.setToolTip("Avanzar 1 segundo (Flecha Derecha)")
+        self.btn_step_fwd.clicked.connect(lambda: self.worker.step(1.0))
+        h_controls.addWidget(self.btn_step_fwd)
+
+        # Separador vertical
+        sep1 = QFrame()
+        sep1.setFrameShape(QFrame.VLine)
+        sep1.setFixedWidth(1)
+        sep1.setStyleSheet("color: #334155;")
+        h_controls.addWidget(sep1)
+
+        # Selector de Modo: Pantalla Dividida vs Lado a Lado
+        lbl_mode = QLabel("Modo:")
+        lbl_mode.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: bold;")
+        h_controls.addWidget(lbl_mode)
+
+        self.btn_mode_split = QPushButton("Dividida", self)
+        self.btn_mode_split.setCheckable(True)
+        self.btn_mode_split.setChecked(True)
+        self.btn_mode_split.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #94a3b8; border: 1px solid #475569;
+                border-radius: 4px; padding: 5px 8px; font-size: 11px;
+            }
+            QPushButton:checked {
+                background-color: #0284c7; color: white; font-weight: bold; border: 1px solid #38bdf8;
+            }
+        """)
+        self.btn_mode_split.clicked.connect(lambda: self._set_mode("split"))
+        h_controls.addWidget(self.btn_mode_split)
+
+        self.btn_mode_sbs = QPushButton("Lado a Lado", self)
+        self.btn_mode_sbs.setCheckable(True)
+        self.btn_mode_sbs.setChecked(False)
+        self.btn_mode_sbs.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #94a3b8; border: 1px solid #475569;
+                border-radius: 4px; padding: 5px 8px; font-size: 11px;
+            }
+            QPushButton:checked {
+                background-color: #0284c7; color: white; font-weight: bold; border: 1px solid #38bdf8;
+            }
+        """)
+        self.btn_mode_sbs.clicked.connect(lambda: self._set_mode("side_by_side"))
+        h_controls.addWidget(self.btn_mode_sbs)
+
+        # Botón Centrar Cortina 50%
+        self.btn_center_divider = QPushButton("Centrar 50%", self)
+        self.btn_center_divider.setStyleSheet("font-size: 11px; padding: 5px 8px; color: #cbd5e1;")
+        self.btn_center_divider.clicked.connect(lambda: self.canvas.set_split_ratio(0.5))
+        h_controls.addWidget(self.btn_center_divider)
+
+        # Indicador porcentaje de divisor
+        self.lbl_divider_pct = QLabel("50%")
+        self.lbl_divider_pct.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
+        h_controls.addWidget(self.lbl_divider_pct)
+
+        h_controls.addStretch()
+
+        # Selector de Audio
+        lbl_audio = QLabel("Audio:")
+        lbl_audio.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: bold;")
+        h_controls.addWidget(lbl_audio)
+
+        self.combo_audio = QComboBox(self)
+        self.combo_audio.addItem("Silenciado", "none")
+        self.combo_audio.addItem("Video A (Original)", "a")
+        self.combo_audio.addItem("Video B (Procesado)", "b")
+        self.combo_audio.setMinimumWidth(145)
+        self.combo_audio.setMaxVisibleItems(5)
+        self.combo_audio.setStyleSheet("""
+            QComboBox {
+                min-width: 145px;
+                padding: 4px 22px 4px 8px;
+                font-size: 11px;
+                background-color: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #475569;
+                border-radius: 4px;
+            }
+            QComboBox:hover {
+                border-color: #38bdf8;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 20px;
+                border-left: 1px solid #334155;
+            }
+            QComboBox::down-arrow {
+                image: url(""" + ARROW_DOWN_URL + """);
+                width: 10px;
+                height: 10px;
+            }
+            QComboBox::down-arrow:hover {
+                image: url(""" + ARROW_DOWN_HOVER_URL + """);
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e293b;
+                color: #f8fafc;
+                selection-background-color: #2563eb;
+                selection-color: #ffffff;
+                border: 1px solid #38bdf8;
+                border-radius: 4px;
+                padding: 2px;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 24px;
+                padding: 3px 6px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #334155;
+            }
+        """)
+        self.combo_audio.currentIndexChanged.connect(self._on_audio_changed)
+        h_controls.addWidget(self.combo_audio)
+
+        # Control de Volumen para Audio de los videos
+        self.btn_volume = QPushButton(self)
+        self.btn_volume.setIcon(create_volume_icon(False))
+        self.btn_volume.setToolTip("Silenciar / Reactivar Audio (M)")
+        self.btn_volume.setFixedSize(28, 28)
+        self.btn_volume.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; border: 1px solid #475569;
+                border-radius: 4px; padding: 2px;
+            }
+            QPushButton:hover {
+                background-color: #334155; border-color: #38bdf8;
+            }
+        """)
+        self.btn_volume.clicked.connect(self._toggle_mute)
+        h_controls.addWidget(self.btn_volume)
+
+        self.slider_volume = ClickableSlider(Qt.Horizontal, self)
+        self.slider_volume.setRange(0, 100)
+        self.slider_volume.setValue(100)
+        self.slider_volume.setFixedWidth(70)
+        self.slider_volume.setToolTip("Nivel de volumen (0% - 100%)")
+        self.slider_volume.setStyleSheet("""
+            QSlider::groove:horizontal {
+                height: 5px;
+                background: #334155;
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal {
+                background: #38bdf8;
+                border-radius: 2px;
+            }
+            QSlider::handle:horizontal {
+                background: #ffffff;
+                border: 1px solid #38bdf8;
+                width: 12px;
+                height: 12px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 6px;
+            }
+            QSlider::handle:horizontal:hover {
+                background: #93c5fd;
+            }
+        """)
+        self.slider_volume.valueChanged.connect(self._on_volume_changed)
+        self.slider_volume.sliderReleased.connect(self._on_volume_released)
+        self.slider_volume.clicked_value.connect(lambda v: self._on_volume_released())
+        h_controls.addWidget(self.slider_volume)
+
+        self.lbl_volume = QLabel("100%", self)
+        self.lbl_volume.setStyleSheet("color: #64748b; font-size: 11px; min-width: 30px;")
+        h_controls.addWidget(self.lbl_volume)
+
+        # Iniciar controles de volumen deshabilitados si audio es 'Silenciado'
+        self.btn_volume.setEnabled(False)
+        self.slider_volume.setEnabled(False)
+
+        # Selector de Velocidad
+        lbl_speed = QLabel("Velocidad:")
+        lbl_speed.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: bold;")
+        h_controls.addWidget(lbl_speed)
+
+        self.combo_speed = QComboBox(self)
+        self.combo_speed.addItem("0.5x", 0.5)
+        self.combo_speed.addItem("1.0x", 1.0)
+        self.combo_speed.addItem("1.5x", 1.5)
+        self.combo_speed.addItem("2.0x", 2.0)
+        self.combo_speed.setCurrentIndex(1)
+        self.combo_speed.setMinimumWidth(68)
+        self.combo_speed.setMaxVisibleItems(5)
+        self.combo_speed.setStyleSheet("""
+            QComboBox {
+                min-width: 68px;
+                padding: 4px 6px;
+                font-size: 11px;
+                background-color: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #475569;
+                border-radius: 4px;
+            }
+            QComboBox:hover {
+                border-color: #38bdf8;
+            }
+            QComboBox::drop-down {
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 16px;
+                border-left: 1px solid #334155;
+            }
+            QComboBox::down-arrow {
+                image: url(""" + ARROW_DOWN_URL + """);
+                width: 10px;
+                height: 10px;
+            }
+            QComboBox::down-arrow:hover {
+                image: url(""" + ARROW_DOWN_HOVER_URL + """);
+            }
+            QComboBox QAbstractItemView {
+                background-color: #1e293b;
+                color: #f8fafc;
+                selection-background-color: #2563eb;
+                selection-color: #ffffff;
+                border: 1px solid #38bdf8;
+                border-radius: 4px;
+                padding: 2px;
+                outline: none;
+            }
+            QComboBox QAbstractItemView::item {
+                min-height: 24px;
+                padding: 3px 6px;
+            }
+            QComboBox QAbstractItemView::item:hover {
+                background-color: #334155;
+            }
+        """)
+        self.combo_speed.currentIndexChanged.connect(self._on_speed_changed)
+        h_controls.addWidget(self.combo_speed)
+
+        # Botón Pantalla Completa
+        self.btn_fullscreen = QPushButton(self)
+        self.btn_fullscreen.setIcon(create_fullscreen_icon(False))
+        self.btn_fullscreen.setIconSize(QSize(20, 20))
+        self.btn_fullscreen.setToolTip("Alternar Pantalla Completa (F / F11 / Doble clic)")
+        self.btn_fullscreen.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #475569;
+                border-radius: 4px;
+                padding: 5px 8px;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                border-color: #38bdf8;
+            }
+        """)
+        self.btn_fullscreen.clicked.connect(self._toggle_fullscreen)
+        h_controls.addWidget(self.btn_fullscreen)
+
+        layout.addLayout(h_controls)
+
+    def _init_shortcuts(self):
+        """Atajos de teclado intuitivos."""
+        QShortcut(QKeySequence(Qt.Key_Space), self, self._on_toggle_play)
+        QShortcut(QKeySequence(Qt.Key_Left), self, lambda: self.worker.step(-1.0))
+        QShortcut(QKeySequence(Qt.Key_Right), self, lambda: self.worker.step(1.0))
+        QShortcut(QKeySequence(Qt.Key_F), self, self._toggle_fullscreen)
+        QShortcut(QKeySequence(Qt.Key_F11), self, self._toggle_fullscreen)
+        QShortcut(QKeySequence(Qt.Key_M), self, self._toggle_mute)
+        QShortcut(QKeySequence(Qt.Key_V), self, self._toggle_mode_key)
+        QShortcut(QKeySequence(Qt.Key_S), self, self._toggle_mode_key)
+
+    def _init_worker(self):
+        """Inicia el motor de decodificación en segundo plano."""
+        self.worker = ComparePlaybackWorker(
+            ffmpeg_path=self.ffmpeg_path,
+            video_a=self.video_a,
+            video_b=self.video_b,
+            duration=self.duration,
+            fps=self.fps,
+            parent=self
+        )
+        self.worker.frame_ready.connect(self._on_frame_ready)
+        self.worker.time_updated.connect(self._on_time_updated)
+        self.worker.state_changed.connect(self._on_playback_state_changed)
+        self.worker.finished.connect(self._on_playback_finished)
+        self.worker.start()
+
+    def _on_frame_ready(self, img_a: QImage, img_b: QImage, timestamp: float):
+        self.canvas.set_images(img_a, img_b)
+
+    def _on_time_updated(self, cur_time: float):
+        if not self.is_seeking:
+            val = int(cur_time * 100)
+            self.slider_time.blockSignals(True)
+            self.slider_time.setValue(val)
+            self.slider_time.blockSignals(False)
+            self.lbl_time_cur.setText(format_timestamp(cur_time))
+
+    def _on_playback_state_changed(self, is_playing: bool):
+        if is_playing:
+            self.btn_play.setText("Pausar")
+            self.btn_play.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self.btn_play.setStyleSheet(
+                "font-weight: bold; font-size: 12px; padding: 6px 10px; "
+                "background-color: #d97706; color: white; border-radius: 6px;"
+            )
+        else:
+            self.btn_play.setText("Reproducir")
+            self.btn_play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self.btn_play.setStyleSheet(
+                "font-weight: bold; font-size: 12px; padding: 6px 10px; "
+                "background-color: #2563eb; color: white; border-radius: 6px;"
+            )
+
+    def _on_playback_finished(self):
+        self._on_playback_state_changed(False)
+
+    def _on_toggle_play(self):
+        self.worker.toggle_play()
+
+    def _on_slider_pressed(self):
+        self.is_seeking = True
+
+    def _on_slider_moved(self, value: int):
+        cur_sec = value / 100.0
+        self.lbl_time_cur.setText(format_timestamp(cur_sec))
+
+    def _on_slider_released(self):
+        self.is_seeking = False
+        target_sec = self.slider_time.value() / 100.0
+        self.worker.seek(target_sec)
+
+    def _on_slider_clicked(self, value: int):
+        target_sec = value / 100.0
+        self.lbl_time_cur.setText(format_timestamp(target_sec))
+        self.worker.seek(target_sec)
+
+    def _on_divider_moved(self, ratio: float):
+        pct = int(ratio * 100)
+        self.lbl_divider_pct.setText(f"{pct}%")
+
+    def _set_mode(self, mode: str):
+        if mode == "split":
+            self.btn_mode_split.setChecked(True)
+            self.btn_mode_sbs.setChecked(False)
+            self.btn_center_divider.setVisible(True)
+            self.lbl_divider_pct.setVisible(True)
+            self.canvas.set_mode("split")
+        else:
+            self.btn_mode_split.setChecked(False)
+            self.btn_mode_sbs.setChecked(True)
+            self.btn_center_divider.setVisible(False)
+            self.lbl_divider_pct.setVisible(False)
+            self.canvas.set_mode("side_by_side")
+
+    def _toggle_mode_key(self):
+        if self.canvas.mode == "split":
+            self._set_mode("side_by_side")
+        else:
+            self._set_mode("split")
+
+    def _on_audio_changed(self, index: int):
+        source = self.combo_audio.itemData(index)
+        self.worker.set_audio_source(source)
+        is_active = (source != "none")
+        self.btn_volume.setEnabled(is_active)
+        self.slider_volume.setEnabled(is_active)
+        self.lbl_volume.setStyleSheet(
+            f"color: {'#94a3b8' if is_active else '#64748b'}; font-size: 11px; min-width: 30px;"
+        )
+
+    def _on_volume_changed(self, value: int):
+        self.lbl_volume.setText(f"{value}%")
+        self.btn_volume.setIcon(create_volume_icon(value == 0))
+        if value > 0:
+            self._unmuted_volume = value
+        self.vol_timer.start()
+
+    def _on_volume_released(self):
+        self.vol_timer.stop()
+        self._apply_volume_to_worker()
+
+    def _apply_volume_to_worker(self):
+        val = self.slider_volume.value()
+        self.worker.set_volume(val)
+
+    def _toggle_mute(self):
+        if not self.slider_volume.isEnabled():
+            return
+        if self.slider_volume.value() > 0:
+            self._unmuted_volume = self.slider_volume.value()
+            self.slider_volume.setValue(0)
+        else:
+            restore_val = getattr(self, "_unmuted_volume", 80) or 80
+            self.slider_volume.setValue(restore_val)
+        self._apply_volume_to_worker()
+
+    def _on_speed_changed(self, index: int):
+        speed = self.combo_speed.itemData(index)
+        self.worker.set_speed(speed)
+
+    def _toggle_fullscreen(self):
+        if self.isFullScreen():
+            self.showNormal()
+            self.btn_fullscreen.setIcon(create_fullscreen_icon(False))
+        else:
+            self.showFullScreen()
+            self.btn_fullscreen.setIcon(create_fullscreen_icon(True))
+
+    def closeEvent(self, event):
+        self.worker.stop()
+        super().closeEvent(event)

@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QLabel, QScrollArea
+    QTabWidget, QLabel, QScrollArea, QStyle
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
@@ -23,6 +23,7 @@ from ui.tab_extract_frames import TabExtractFrames
 from ui.tab_create_video import TabCreateVideo
 from ui.tab_segment import TabSegment
 from ui.tab_concat import TabConcat
+from ui.tab_compare import TabCompare
 from ui.tab_settings import TabSettings
 
 
@@ -50,11 +51,27 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout()
 
         title_vbox = QVBoxLayout()
-        lbl_title = QLabel("🎬 MyFFmpeg GUI")
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        lbl_header_icon = QLabel()
+        win_icon = self.windowIcon()
+        if win_icon and not win_icon.isNull():
+            lbl_header_icon.setPixmap(win_icon.pixmap(24, 24))
+        else:
+            lbl_header_icon.setPixmap(self.style().standardIcon(QStyle.SP_MediaPlay).pixmap(24, 24))
+
+        lbl_title = QLabel("MyFFmpeg GUI")
         lbl_title.setObjectName("lbl_title")
+
+        title_row.addWidget(lbl_header_icon)
+        title_row.addWidget(lbl_title)
+        title_row.addStretch()
+
         lbl_sub = QLabel("Herramienta gráfica profesional para FFmpeg | Soporte Multiplataforma")
         lbl_sub.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        title_vbox.addWidget(lbl_title)
+        title_vbox.addLayout(title_row)
         title_vbox.addWidget(lbl_sub)
 
         header_layout.addLayout(title_vbox)
@@ -79,6 +96,7 @@ class MainWindow(QMainWindow):
         self.tab_create = TabCreateVideo(self.get_active_ffmpeg_paths, self)
         self.tab_segment = TabSegment(self.get_active_ffmpeg_paths, self)
         self.tab_concat = TabConcat(self.get_active_ffmpeg_paths, self)
+        self.tab_compare = TabCompare(self.get_active_ffmpeg_paths, self)
 
         # Títulos limpios, concisos y compatibles con fuentes de Windows y Linux
         self.tabs.addTab(self._wrap_tab(self.tab_audio), "Audio (MP3 / WAV)")
@@ -87,6 +105,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._wrap_tab(self.tab_create), "Crear Video")
         self.tabs.addTab(self._wrap_tab(self.tab_segment), "Segmentar Video")
         self.tabs.addTab(self.tab_concat, "Unir Segmentos")
+        self.tabs.addTab(self.tab_compare, "Comparar Videos")
         self.tabs.addTab(self.tab_settings, "Ajustes")
 
         # Mapa de nombres de pestañas para invocación desde CLI y menú contextual
@@ -97,7 +116,8 @@ class MainWindow(QMainWindow):
             "create": (3, self.tab_create),
             "segment": (4, self.tab_segment),
             "concat": (5, self.tab_concat),
-            "settings": (6, self.tab_settings),
+            "compare": (6, self.tab_compare),
+            "settings": (7, self.tab_settings),
         }
 
         # Forzar activación inmediata de layout al cambiar de pestaña
@@ -141,6 +161,8 @@ class MainWindow(QMainWindow):
             if file_path and os.path.isfile(file_path):
                 if hasattr(tab_widget, "input_selector"):
                     tab_widget.input_selector.set_path(file_path)
+                elif hasattr(tab_widget, "input_a"):
+                    tab_widget.input_a.set_path(file_path)
 
     def _wrap_tab(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()
@@ -167,7 +189,7 @@ class MainWindow(QMainWindow):
 
     def _on_config_saved(self):
         """Actualiza la visualización de la Carpeta Base en todas las pestañas."""
-        for tab in (self.tab_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat):
+        for tab in (self.tab_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat, self.tab_compare):
             if hasattr(tab, "update_base_dir_display"):
                 tab.update_base_dir_display()
 
@@ -183,3 +205,32 @@ class MainWindow(QMainWindow):
 
         # Fallback a detección por defecto
         return ffmpeg_core.get_default_ffmpeg_paths()
+
+    def closeEvent(self, event):
+        """Asegura la cancelación y terminación limpia de todos los subprocesos y trabajadores al cerrar."""
+        tabs_to_clean = (
+            getattr(self, "tab_audio", None),
+            getattr(self, "tab_convert", None),
+            getattr(self, "tab_extract", None),
+            getattr(self, "tab_create", None),
+            getattr(self, "tab_segment", None),
+            getattr(self, "tab_concat", None),
+            getattr(self, "tab_compare", None),
+        )
+        for tab in tabs_to_clean:
+            if tab is not None:
+                if hasattr(tab, "worker") and tab.worker:
+                    try:
+                        if tab.worker.isRunning():
+                            tab.worker.cancel()
+                            tab.worker.wait(400)
+                    except Exception:
+                        pass
+                if hasattr(tab, "_cleanup_playback_procs"):
+                    try:
+                        tab._cleanup_playback_procs()
+                    except Exception:
+                        pass
+        event.accept()
+        super().closeEvent(event)
+

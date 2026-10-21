@@ -13,9 +13,60 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
 
+import config_manager
+
+
+class DropLineEdit(QLineEdit):
+    """
+    QLineEdit especializado con soporte robusto para Drag & Drop desde
+    exploradores de archivos de Linux (Dolphin, Nautilus, Thunar) y Windows.
+    Interpreta URIs, limpia prefijos 'file://', decodifica caracteres %20 y comillas.
+    """
+    file_dropped = pyqtSignal(str)
+
+    def __init__(self, placeholder: str = "", parent=None):
+        super().__init__(parent)
+        if placeholder:
+            self.setPlaceholderText(placeholder)
+        self.setAcceptDrops(True)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        path = ""
+        mime = event.mimeData()
+        if mime.hasUrls():
+            urls = mime.urls()
+            if urls:
+                path = urls[0].toLocalFile()
+                if not path:
+                    path = urls[0].toString()
+        elif mime.hasText():
+            path = mime.text()
+
+        if path:
+            cleaned = config_manager.clean_file_path(path)
+            self.setText(cleaned)
+            self.file_dropped.emit(cleaned)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
 class FileSelector(QWidget):
     """
     Selector de archivo con botón de examinar y soporte para Arrastrar y Soltar (Drag & Drop).
+    Soporta rutas nativas y URIs tipo file:// arrastradas desde Dolphin, Nautilus o Windows Explorer.
     """
     file_selected = pyqtSignal(str)
 
@@ -37,9 +88,9 @@ class FileSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self.edit = QLineEdit(self)
-        self.edit.setPlaceholderText(placeholder)
+        self.edit = DropLineEdit(placeholder, self)
         self.edit.textChanged.connect(self._on_text_changed)
+        self.edit.file_dropped.connect(self._on_dropped)
 
         self.btn_browse = QPushButton("Examinar...", self)
         self.btn_browse.clicked.connect(self._browse)
@@ -63,27 +114,52 @@ class FileSelector(QWidget):
         if path:
             self.set_path(path)
 
+    def _on_dropped(self, clean_path: str):
+        self.set_path(clean_path)
+
     def _on_text_changed(self, text: str):
-        self.file_selected.emit(text.strip())
+        cleaned = config_manager.clean_file_path(text)
+        if cleaned != text and (text.startswith("file://") or text.startswith('"') or text.startswith("'")):
+            self.edit.blockSignals(True)
+            self.edit.setText(cleaned)
+            self.edit.blockSignals(False)
+        self.file_selected.emit(cleaned)
 
     def get_path(self) -> str:
-        return self.edit.text().strip()
+        return config_manager.clean_file_path(self.edit.text())
 
     def set_path(self, path: str):
-        self.edit.setText(path)
-        self.file_selected.emit(path)
+        cleaned = config_manager.clean_file_path(path)
+        self.edit.blockSignals(True)
+        self.edit.setText(cleaned)
+        self.edit.blockSignals(False)
+        self.file_selected.emit(cleaned)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls:
-            path = urls[0].toLocalFile()
-            if path:
-                self.set_path(path)
-                event.acceptProposedAction()
+        path = ""
+        mime = event.mimeData()
+        if mime.hasUrls():
+            urls = mime.urls()
+            if urls:
+                path = urls[0].toLocalFile() or urls[0].toString()
+        elif mime.hasText():
+            path = mime.text()
+
+        if path:
+            self.set_path(path)
+            event.acceptProposedAction()
 
 
 class FolderSelector(QWidget):
@@ -100,9 +176,9 @@ class FolderSelector(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        self.edit = QLineEdit(self)
-        self.edit.setPlaceholderText(placeholder)
-        self.edit.textChanged.connect(lambda t: self.folder_selected.emit(t.strip()))
+        self.edit = DropLineEdit(placeholder, self)
+        self.edit.textChanged.connect(self._on_text_changed)
+        self.edit.file_dropped.connect(self._on_dropped)
 
         self.btn_browse = QPushButton("Examinar...", self)
         self.btn_browse.clicked.connect(self._browse)
@@ -116,26 +192,57 @@ class FolderSelector(QWidget):
         if folder:
             self.set_path(folder)
 
+    def _on_dropped(self, raw_path: str):
+        cleaned = config_manager.clean_file_path(raw_path)
+        if os.path.isdir(cleaned):
+            self.set_path(cleaned)
+        elif os.path.isfile(cleaned):
+            self.set_path(os.path.dirname(cleaned))
+        else:
+            self.set_path(cleaned)
+
+    def _on_text_changed(self, text: str):
+        cleaned = config_manager.clean_file_path(text)
+        if cleaned != text and (text.startswith("file://") or text.startswith('"') or text.startswith("'")):
+            self.edit.blockSignals(True)
+            self.edit.setText(cleaned)
+            self.edit.blockSignals(False)
+        self.folder_selected.emit(cleaned)
+
     def get_path(self) -> str:
-        return self.edit.text().strip()
+        return config_manager.clean_file_path(self.edit.text())
 
     def set_path(self, path: str):
-        self.edit.setText(path)
-        self.folder_selected.emit(path)
+        cleaned = config_manager.clean_file_path(path)
+        self.edit.blockSignals(True)
+        self.edit.setText(cleaned)
+        self.edit.blockSignals(False)
+        self.folder_selected.emit(cleaned)
 
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
             event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
     def dropEvent(self, event):
-        urls = event.mimeData().urls()
-        if urls:
-            path = urls[0].toLocalFile()
-            if os.path.isdir(path):
-                self.set_path(path)
-            else:
-                # Si arrastra un archivo, tomar su carpeta contenedora
-                self.set_path(os.path.dirname(path))
+        path = ""
+        mime = event.mimeData()
+        if mime.hasUrls():
+            urls = mime.urls()
+            if urls:
+                path = urls[0].toLocalFile() or urls[0].toString()
+        elif mime.hasText():
+            path = mime.text()
+
+        if path:
+            self._on_dropped(path)
             event.acceptProposedAction()
 
 
@@ -258,10 +365,11 @@ class CommandPreviewWidget(QWidget):
         layout.setSpacing(4)
 
         header_layout = QHBoxLayout()
-        self.lbl_title = QLabel(f"⚡ {title}")
+        self.lbl_title = QLabel(f"▶ {title}")
         self.lbl_title.setStyleSheet("font-weight: bold; color: #38bdf8; font-size: 11px;")
 
-        self.btn_copy = QPushButton("📋 Copiar Comando")
+        self.btn_copy = QPushButton("Copiar Comando")
+        self.btn_copy.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
         self.btn_copy.setFixedHeight(26)
         self.btn_copy.setCursor(Qt.PointingHandCursor)
         self.btn_copy.setStyleSheet("""
@@ -338,7 +446,10 @@ class CommandPreviewWidget(QWidget):
         if self._current_cmd_str:
             QApplication.clipboard().setText(self._current_cmd_str)
             self.btn_copy.setText("✓ ¡Copiado!")
-            QTimer.singleShot(1500, lambda: self.btn_copy.setText("📋 Copiar Comando"))
+            def _reset():
+                self.btn_copy.setText("Copiar Comando")
+                self.btn_copy.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+            QTimer.singleShot(1500, _reset)
 
 
 class OutputActionsWidget(QWidget):

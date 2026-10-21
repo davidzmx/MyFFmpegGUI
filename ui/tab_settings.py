@@ -9,6 +9,7 @@ clic en variables disponibles para no tener que escribirlas manualmente).
 
 import os
 import sys
+import re
 from pathlib import Path
 from PyQt5.QtCore import pyqtSignal, Qt
 from PyQt5.QtWidgets import (
@@ -43,7 +44,7 @@ class CustomActionDialog(QDialog):
 
         form = QFormLayout()
         self.edit_name = QLineEdit()
-        self.edit_name.setPlaceholderText("ej. ⚡ Convertir a MP4 (H.264)")
+        self.edit_name.setPlaceholderText("ej. Convertir a MP4 (H.264)")
         form.addRow("Nombre en Menú:", self.edit_name)
 
         self.edit_cmd = QLineEdit()
@@ -70,7 +71,7 @@ class CustomActionDialog(QDialog):
         grid_chips.setSpacing(6)
         for var_tag, tooltip_txt in vars_info:
             btn_chip = QPushButton(var_tag)
-            btn_chip.setToolTip(f"{var_tag} ➔ {tooltip_txt} (Haz clic para insertar)")
+            btn_chip.setToolTip(f"{var_tag} -> {tooltip_txt} (Haz clic para insertar)")
             btn_chip.setCursor(Qt.PointingHandCursor)
             btn_chip.setStyleSheet("""
                 QPushButton {
@@ -103,17 +104,20 @@ class CustomActionDialog(QDialog):
         h_tpl = QHBoxLayout()
         h_tpl.setSpacing(6)
 
-        btn_tpl_mp3 = QPushButton("🎵 MP3 Directo")
+        btn_tpl_mp3 = QPushButton("MP3 Directo")
+        btn_tpl_mp3.setIcon(self.style().standardIcon(QStyle.SP_MediaVolume))
         btn_tpl_mp3.setStyleSheet("background-color: #1e2235; color: #a5b4fc; font-size: 11px; padding: 4px 8px;")
-        btn_tpl_mp3.clicked.connect(lambda: self._set_template('⚡ Convertir a MP3', 'ffmpeg -y -i "{input}" "{output_no_ext}.mp3"'))
+        btn_tpl_mp3.clicked.connect(lambda: self._set_template('Convertir a MP3', 'ffmpeg -y -i "{input}" "{output_no_ext}.mp3"'))
 
-        btn_tpl_h264 = QPushButton("🎬 MP4 H.264 Universal")
+        btn_tpl_h264 = QPushButton("MP4 H.264 Universal")
+        btn_tpl_h264.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         btn_tpl_h264.setStyleSheet("background-color: #1e2235; color: #a5b4fc; font-size: 11px; padding: 4px 8px;")
-        btn_tpl_h264.clicked.connect(lambda: self._set_template('⚡ Convertir a MP4 (H.264)', 'ffmpeg -y -i "{input}" -c:v libx264 -crf 20 -c:a aac "{output_no_ext}_h264.mp4"'))
+        btn_tpl_h264.clicked.connect(lambda: self._set_template('Convertir a MP4 (H.264)', 'ffmpeg -y -i "{input}" -c:v libx264 -crf 20 -c:a aac "{output_no_ext}_h264.mp4"'))
 
-        btn_tpl_pic = QPushButton("📸 Captura PNG")
+        btn_tpl_pic = QPushButton("Captura PNG")
+        btn_tpl_pic.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
         btn_tpl_pic.setStyleSheet("background-color: #1e2235; color: #a5b4fc; font-size: 11px; padding: 4px 8px;")
-        btn_tpl_pic.clicked.connect(lambda: self._set_template('⚡ Capturar Fotograma en PNG', 'ffmpeg -y -ss 00:00:01 -i "{input}" -vframes 1 "{output_no_ext}_thumb.png"'))
+        btn_tpl_pic.clicked.connect(lambda: self._set_template('Capturar Fotograma en PNG', 'ffmpeg -y -ss 00:00:01 -i "{input}" -vframes 1 "{output_no_ext}_thumb.png"'))
 
         h_tpl.addWidget(btn_tpl_mp3)
         h_tpl.addWidget(btn_tpl_h264)
@@ -234,7 +238,7 @@ class TabSettings(QWidget):
         layout.addWidget(group_base)
 
         # 2. Estado del Sistema y Rutas de FFmpeg
-        group_paths = QGroupBox("2. Ejecutables de FFmpeg y FFprobe")
+        group_paths = QGroupBox("2. Ejecutables de FFmpeg, FFprobe y FFplay")
         layout_paths = QVBoxLayout(group_paths)
 
         lbl_os = QLabel(f"Sistema Operativo Detectado: <b>{sys.platform.upper()}</b>")
@@ -259,11 +263,21 @@ class TabSettings(QWidget):
         h_ffprobe.addWidget(btn_browse_ffprobe)
         layout_paths.addLayout(h_ffprobe)
 
+        layout_paths.addWidget(QLabel("Ruta del ejecutable FFplay (Opcional - Audio y visor auxiliar):"))
+        h_ffplay = QHBoxLayout()
+        self.edit_ffplay = QLineEdit()
+        btn_browse_ffplay = QPushButton("Examinar...")
+        btn_browse_ffplay.clicked.connect(self._browse_ffplay)
+        h_ffplay.addWidget(self.edit_ffplay)
+        h_ffplay.addWidget(btn_browse_ffplay)
+        layout_paths.addLayout(h_ffplay)
+
         h_actions = QHBoxLayout()
         btn_auto = QPushButton("Autodetectar en Sistema")
         btn_auto.clicked.connect(self._auto_detect)
 
-        btn_save = QPushButton("💾 Guardar Configuración")
+        btn_save = QPushButton("Guardar Configuración")
+        btn_save.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
         btn_save.setStyleSheet("background-color: #4338ca; color: white; font-weight: bold;")
         btn_save.clicked.connect(self._save_settings)
 
@@ -284,7 +298,7 @@ class TabSettings(QWidget):
         lbl_context_info = QLabel(
             "Personaliza las opciones y el <b>orden</b> en que aparecerán al hacer <b>clic derecho sobre cualquier archivo multimedia</b> "
             "en tu explorador de archivos (Dolphin, Nautilus o Windows Explorer). Puedes <b>reordenar</b> con los botones "
-            "⬆️ / ⬇️, activar/desactivar opciones, o añadir tus propios <b>comandos rápidos que se ejecutan sin abrir la interfaz</b>:"
+            "▲ / ▼, activar/desactivar opciones, o añadir tus propios <b>comandos rápidos que se ejecutan sin abrir la interfaz</b>:"
         )
         lbl_context_info.setTextFormat(1)
         lbl_context_info.setWordWrap(True)
@@ -302,7 +316,7 @@ class TabSettings(QWidget):
         self.table_actions.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table_actions.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.table_actions.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.table_actions.setColumnWidth(1, 220)
+        self.table_actions.setColumnWidth(1, 240)
         self.table_actions.setFixedHeight(230)
         self.table_actions.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_actions.setSelectionMode(QTableWidget.SingleSelection)
@@ -320,12 +334,14 @@ class TabSettings(QWidget):
         lbl_reorder.setStyleSheet("color: #94a3b8; font-size: 11px;")
         v_order.addWidget(lbl_reorder)
 
-        self.btn_move_up = QPushButton("⬆️ Subir")
+        self.btn_move_up = QPushButton("Subir")
+        self.btn_move_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
         self.btn_move_up.setToolTip("Mover el elemento seleccionado hacia arriba en el menú de clic derecho")
         self.btn_move_up.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; padding: 8px 12px;")
         self.btn_move_up.clicked.connect(lambda: self._move_selected_action(-1))
 
-        self.btn_move_down = QPushButton("⬇️ Bajar")
+        self.btn_move_down = QPushButton("Bajar")
+        self.btn_move_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
         self.btn_move_down.setToolTip("Mover el elemento seleccionado hacia abajo en el menú de clic derecho")
         self.btn_move_down.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; padding: 8px 12px;")
         self.btn_move_down.clicked.connect(lambda: self._move_selected_action(1))
@@ -339,11 +355,13 @@ class TabSettings(QWidget):
 
         # Botones de gestión de atajos
         h_table_btns = QHBoxLayout()
-        btn_add_custom = QPushButton("➕ Agregar Atajo Rápido Personalizado (Sin GUI)")
+        btn_add_custom = QPushButton("+ Agregar Atajo Rápido Personalizado (Sin GUI)")
+        btn_add_custom.setIcon(self.style().standardIcon(QStyle.SP_FileDialogNewFolder))
         btn_add_custom.setStyleSheet("background-color: #4338ca; color: white; font-weight: bold;")
         btn_add_custom.clicked.connect(self._add_custom_action)
 
-        btn_reset_defaults = QPushButton("🔄 Restablecer Orden y Opciones Predeterminadas")
+        btn_reset_defaults = QPushButton("Restablecer Orden y Opciones Predeterminadas")
+        btn_reset_defaults.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         btn_reset_defaults.clicked.connect(self._reset_default_actions)
 
         h_table_btns.addWidget(btn_add_custom)
@@ -360,20 +378,24 @@ class TabSettings(QWidget):
         layout_context.addLayout(h_status)
 
         h_ctx_btns = QHBoxLayout()
-        self.btn_install_context = QPushButton("💾 Aplicar Cambios al Clic Derecho")
+        self.btn_install_context = QPushButton("Aplicar Cambios al Clic Derecho")
+        self.btn_install_context.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
         self.btn_install_context.setStyleSheet("background-color: #059669; color: white; font-weight: bold;")
         self.btn_install_context.clicked.connect(self._install_context_menu)
 
-        self.btn_uninstall_context = QPushButton("🗑️ Desinstalar Menú")
+        self.btn_uninstall_context = QPushButton("Desinstalar Menú")
+        self.btn_uninstall_context.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
         self.btn_uninstall_context.setStyleSheet("background-color: #334155; color: #f87171;")
         self.btn_uninstall_context.clicked.connect(self._uninstall_context_menu)
 
-        self.btn_export_reg = QPushButton("📄 Exportar Registro Windows (.reg)")
+        self.btn_export_reg = QPushButton("Exportar Registro Windows (.reg)")
+        self.btn_export_reg.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
         self.btn_export_reg.clicked.connect(self._export_windows_reg)
 
         h_ctx_btns.addWidget(self.btn_install_context)
         h_ctx_btns.addWidget(self.btn_uninstall_context)
         h_ctx_btns.addWidget(self.btn_export_reg)
+        layout_context.addLayout(h_ctx_btns)
         layout_context.addLayout(h_ctx_btns)
 
         layout.addWidget(group_context)
@@ -425,14 +447,17 @@ class TabSettings(QWidget):
         cfg = config_manager.load_config()
         ffmpeg_p = cfg.get("ffmpeg_path")
         ffprobe_p = cfg.get("ffprobe_path")
+        ffplay_p = cfg.get("ffplay_path")
         base_dir = cfg.get("base_output_dir", config_manager.get_default_base_dir())
         auto_sub = cfg.get("auto_suggest_subfolders", True)
         save_pref = cfg.get("default_save_location", "same_folder")
 
         def_ffmpeg, def_ffprobe = ffmpeg_core.get_default_ffmpeg_paths()
+        def_ffplay = ffmpeg_core.get_ffplay_path(ffmpeg_p or def_ffmpeg)
 
         self.edit_ffmpeg.setText(ffmpeg_p or def_ffmpeg or "")
         self.edit_ffprobe.setText(ffprobe_p or def_ffprobe or "")
+        self.edit_ffplay.setText(ffplay_p or def_ffplay or "")
         self.folder_base.set_path(base_dir)
         self.chk_auto_subfolders.setChecked(bool(auto_sub))
 
@@ -467,14 +492,33 @@ class TabSettings(QWidget):
             h_chk.setContentsMargins(0, 0, 0, 0)
             self.table_actions.setCellWidget(row, 0, chk_container)
 
-            # 1. Nombre
-            name_item = QTableWidgetItem(a.get("name", ""))
+            # 1. Nombre con icono nativo
+            raw_name = a.get("name", "")
+            clean_name = re.sub(r'^[^\w\s\-:()]+', '', raw_name).strip()
+            name_item = QTableWidgetItem(clean_name)
+            is_quick = a.get("type") == "quick"
+
+            if "audio" in act_id:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_MediaVolume))
+            elif "video" in act_id:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            elif "frames" in act_id:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_FileDialogContentsView))
+            elif "segment" in act_id:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_TitleBarMenuButton))
+            elif "compare" in act_id:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
+            elif is_quick:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_CommandLink))
+            else:
+                name_item.setIcon(self.style().standardIcon(QStyle.SP_DesktopIcon))
+
             self.table_actions.setItem(row, 1, name_item)
 
             # 2. Tipo
-            is_quick = a.get("type") == "quick"
-            type_text = "⚡ Rápido (Sin GUI)" if is_quick else "📂 Abrir Interfaz"
+            type_text = "Rápido (Sin GUI)" if is_quick else "Abrir Interfaz"
             type_item = QTableWidgetItem(type_text)
+            type_item.setIcon(self.style().standardIcon(QStyle.SP_CommandLink if is_quick else QStyle.SP_TitleBarNormalButton))
             type_item.setTextAlignment(Qt.AlignCenter)
             type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
             self.table_actions.setItem(row, 2, type_item)
@@ -488,7 +532,7 @@ class TabSettings(QWidget):
             detail_item.setFlags(detail_item.flags() & ~Qt.ItemIsEditable)
             self.table_actions.setItem(row, 3, detail_item)
 
-            # 4. Orden y Gestión (▲ Subir, ▼ Bajar, 🗑️ Eliminar)
+            # 4. Orden y Gestión (▲ Subir, ▼ Bajar, Eliminar)
             cell_container = QWidget()
             h_cell = QHBoxLayout(cell_container)
             h_cell.setContentsMargins(4, 2, 4, 2)
@@ -512,10 +556,11 @@ class TabSettings(QWidget):
             h_cell.addWidget(btn_down)
 
             if a.get("is_custom"):
-                btn_del = QPushButton("🗑️")
+                btn_del = QPushButton()
+                btn_del.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
                 btn_del.setToolTip("Eliminar este atajo personalizado")
                 btn_del.setFixedSize(28, 22)
-                btn_del.setStyleSheet("color: #f87171; background-color: #1e293b; border-radius: 3px; font-size: 11px;")
+                btn_del.setStyleSheet("color: #f87171; background-color: #1e293b; border-radius: 3px;")
                 btn_del.clicked.connect(lambda _, target_id=act_id: self._delete_custom_action(target_id))
                 h_cell.addWidget(btn_del)
 
@@ -592,11 +637,11 @@ class TabSettings(QWidget):
     def _update_preview_label(self):
         base_dir = self.folder_base.get_path() or config_manager.get_default_base_dir()
         if self.radio_pref_same.isChecked():
-            preview = "📌 Preferencia activa: Misma carpeta que el archivo original (ej: /videos/viaje.mp4 ➔ /videos/viaje.mp3)"
+            preview = "• Preferencia activa: Misma carpeta que el archivo original (ej: /videos/viaje.mp4 -> /videos/viaje.mp3)"
         elif self.chk_auto_subfolders.isChecked():
-            preview = f"📌 Preferencia activa: Carpeta Base con subcarpeta:\n📁 {base_dir}/viaje/viaje_audio.wav"
+            preview = f"• Preferencia activa: Carpeta Base con subcarpeta:\n  {base_dir}/viaje/viaje_audio.wav"
         else:
-            preview = f"📌 Preferencia activa: Carpeta Base directa:\n📁 {base_dir}/viaje_audio.wav"
+            preview = f"• Preferencia activa: Carpeta Base directa:\n  {base_dir}/viaje_audio.wav"
         self.lbl_preview_example.setText(preview)
 
     def _browse_ffmpeg(self):
@@ -616,14 +661,24 @@ class TabSettings(QWidget):
         if path:
             self.edit_ffprobe.setText(path)
 
+    def _browse_ffplay(self):
+        from PyQt5.QtWidgets import QFileDialog
+        is_win = sys.platform.startswith("win")
+        filt = "Ejecutable FFplay (ffplay.exe);;Todos (*.*)" if is_win else "Ejecutable FFplay (ffplay);;Todos (*.*)"
+        path, _ = QFileDialog.getOpenFileName(self, "Seleccionar ejecutable FFplay", "", filt)
+        if path:
+            self.edit_ffplay.setText(path)
+
     def _auto_detect(self):
         def_ffmpeg, def_ffprobe = ffmpeg_core.get_default_ffmpeg_paths()
+        def_ffplay = ffmpeg_core.get_ffplay_path(def_ffmpeg)
         self.edit_ffmpeg.setText(def_ffmpeg or "")
         self.edit_ffprobe.setText(def_ffprobe or "")
+        self.edit_ffplay.setText(def_ffplay or "")
         self._test_version()
         QMessageBox.information(
             self, "Detección",
-            f"FFmpeg: {def_ffmpeg or 'No hallado'}\nFFprobe: {def_ffprobe or 'No hallado'}"
+            f"FFmpeg: {def_ffmpeg or 'No hallado'}\nFFprobe: {def_ffprobe or 'No hallado'}\nFFplay: {def_ffplay or 'No hallado'}"
         )
 
     def _save_settings(self):
@@ -635,6 +690,7 @@ class TabSettings(QWidget):
         cfg = {
             "ffmpeg_path": self.edit_ffmpeg.text().strip(),
             "ffprobe_path": self.edit_ffprobe.text().strip(),
+            "ffplay_path": self.edit_ffplay.text().strip(),
             "base_output_dir": base_dir,
             "auto_suggest_subfolders": self.chk_auto_subfolders.isChecked(),
             "default_save_location": save_loc
@@ -653,9 +709,13 @@ class TabSettings(QWidget):
         ver = ffmpeg_core.get_ffmpeg_version(path)
         ffprobe_p = self.edit_ffprobe.text().strip()
         ffprobe_status = "Detectado" if ffprobe_p and os.path.isfile(ffprobe_p) else "No encontrado"
+        ffplay_p = self.edit_ffplay.text().strip() or ffmpeg_core.get_ffplay_path(path)
+        ffplay_status = "Detectado" if ffplay_p and os.path.isfile(ffplay_p) else "Opcional / No encontrado"
 
         self.txt_version.setText(
-            f"FFmpeg OK: {ver}\nFFprobe estado: {ffprobe_status} ({ffprobe_p})"
+            f"FFmpeg OK: {ver}\n"
+            f"FFprobe estado: {ffprobe_status} ({ffprobe_p or 'No configurado'})\n"
+            f"FFplay estado: {ffplay_status} ({ffplay_p or 'No configurado'})"
         )
 
     def get_paths(self):
@@ -664,14 +724,16 @@ class TabSettings(QWidget):
     def _update_context_status(self):
         installed = context_menu_manager.is_context_menu_installed()
         if installed:
-            self.lbl_context_status.setText("🟢 Estado: Integrado activamente en el menú contextual de clic derecho.")
+            self.lbl_context_status.setText("<span style='color: #10b981; font-size: 14px;'>●</span> <b>Estado:</b> Integrado activamente en el menú contextual de clic derecho.")
             self.lbl_context_status.setStyleSheet("color: #4ade80; font-weight: bold;")
-            self.btn_install_context.setText("🔄 Aplicar Cambios al Clic Derecho")
+            self.btn_install_context.setText("Aplicar Cambios al Clic Derecho")
+            self.btn_install_context.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
             self.btn_uninstall_context.setEnabled(True)
         else:
-            self.lbl_context_status.setText("⚪ Estado: No integrado en el menú contextual del sistema.")
+            self.lbl_context_status.setText("<span style='color: #94a3b8; font-size: 14px;'>○</span> <b>Estado:</b> No integrado en el menú contextual del sistema.")
             self.lbl_context_status.setStyleSheet("color: #94a3b8; font-weight: bold;")
-            self.btn_install_context.setText("➕ Integrar en Clic Derecho")
+            self.btn_install_context.setText("Integrar en Clic Derecho")
+            self.btn_install_context.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
             self.btn_uninstall_context.setEnabled(False)
 
     def _install_context_menu(self):
@@ -680,20 +742,20 @@ class TabSettings(QWidget):
         if ok:
             QMessageBox.information(
                 self, "Integración de Menú Contextual",
-                f"✅ {msg}\n\n"
+                f"{msg}\n\n"
                 "¡Ahora al hacer clic derecho sobre cualquier archivo multimedia, "
                 "aparecerán las opciones en el orden exacto configurado!"
             )
         else:
-            QMessageBox.critical(self, "Error al Instalar", f"❌ {msg}")
+            QMessageBox.critical(self, "Error al Instalar", f"Error: {msg}")
 
     def _uninstall_context_menu(self):
         ok, msg = context_menu_manager.uninstall_context_menu()
         self._update_context_status()
         if ok:
-            QMessageBox.information(self, "Menú Contextual", f"ℹ️ {msg}")
+            QMessageBox.information(self, "Menú Contextual", msg)
         else:
-            QMessageBox.warning(self, "Aviso", f"⚠️ {msg}")
+            QMessageBox.warning(self, "Aviso", msg)
 
     def _export_windows_reg(self):
         try:

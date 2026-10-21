@@ -92,7 +92,7 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
     import urllib.parse
 
     if not file_path:
-        send_desktop_notification("MyFFmpeg GUI", "❌ Error: No se especificó ningún archivo de entrada.")
+        send_desktop_notification("MyFFmpeg GUI", "Error: No se especificó ningún archivo de entrada.")
         return False
 
     # Manejar posibles URIs tipo file:// pasadas por KDE / GNOME
@@ -102,7 +102,7 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
     file_path = os.path.abspath(file_path)
 
     if not os.path.isfile(file_path):
-        send_desktop_notification("MyFFmpeg GUI", f"❌ Error: Archivo no encontrado:\n{file_path}")
+        send_desktop_notification("MyFFmpeg GUI", f"Error: Archivo no encontrado:\n{file_path}")
         return False
 
     actions = config_manager.get_context_actions()
@@ -112,11 +112,11 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
         if action_id == "quick_mp3":
             action = {
                 "id": "quick_mp3",
-                "name": "⚡ Rápido: Convertir a MP3",
+                "name": "Rápido: Convertir a MP3",
                 "command_template": 'ffmpeg -y -i "{input}" "{output_no_ext}.mp3"'
             }
         else:
-            send_desktop_notification("MyFFmpeg GUI", f"❌ Error: Acción rápida '{action_id}' no encontrada.")
+            send_desktop_notification("MyFFmpeg GUI", f"Error: Acción rápida '{action_id}' no encontrada.")
             return False
 
     input_dir = os.path.dirname(file_path)
@@ -137,7 +137,7 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
         configured_ffmpeg = "ffmpeg"
 
     action_name = action.get("name", "Conversión Rápida")
-    send_desktop_notification("MyFFmpeg GUI", f"⏳ {action_name} iniciada:\n{filename}")
+    send_desktop_notification("MyFFmpeg GUI", f"Iniciando: {action_name}\n{filename}")
 
     # Reemplazo de marcadores de posición
     cmd_str = template
@@ -160,18 +160,18 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
         if res.returncode == 0:
             send_desktop_notification(
                 "MyFFmpeg GUI",
-                f"✅ {action_name} finalizada con éxito:\n{stem}"
+                f"Éxito: {action_name} finalizada:\n{stem}"
             )
             return True
         else:
             err_line = res.stderr.strip().splitlines()[-1] if res.stderr else f"Código {res.returncode}"
             send_desktop_notification(
                 "MyFFmpeg GUI",
-                f"❌ Error en la conversión ({filename}):\n{err_line[:120]}"
+                f"Error en la conversión ({filename}):\n{err_line[:120]}"
             )
             return False
     except Exception as e:
-        send_desktop_notification("MyFFmpeg GUI", f"❌ Error al ejecutar proceso: {e}")
+        send_desktop_notification("MyFFmpeg GUI", f"Error al ejecutar proceso: {e}")
         return False
 
 

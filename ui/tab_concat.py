@@ -80,21 +80,27 @@ class TabConcat(QWidget):
         # Botones de gestión de lista
         h_tools = QHBoxLayout()
         btn_add_files = QPushButton("Añadir Archivos...")
+        btn_add_files.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
         btn_add_files.clicked.connect(self._add_files)
 
         btn_add_folder = QPushButton("Añadir Carpeta...")
+        btn_add_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         btn_add_folder.clicked.connect(self._add_folder)
 
-        btn_up = QPushButton("▲ Subir")
+        btn_up = QPushButton("Subir")
+        btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
         btn_up.clicked.connect(self._move_up)
 
-        btn_down = QPushButton("▼ Bajar")
+        btn_down = QPushButton("Bajar")
+        btn_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
         btn_down.clicked.connect(self._move_down)
 
         btn_remove = QPushButton("Eliminar")
+        btn_remove.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
         btn_remove.clicked.connect(self._remove_selected)
 
         btn_clear = QPushButton("Limpiar Todo")
+        btn_clear.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
         btn_clear.clicked.connect(self._clear_list)
 
         h_tools.addWidget(btn_add_files)
@@ -160,6 +166,7 @@ class TabConcat(QWidget):
         h_audio_top.addWidget(self.audio_selector, 1)
 
         self.btn_clear_audio = QPushButton("Quitar Audio")
+        self.btn_clear_audio.setIcon(self.style().standardIcon(QStyle.SP_DialogDiscardButton))
         self.btn_clear_audio.setToolTip("Quitar la pista de audio seleccionada")
         self.btn_clear_audio.clicked.connect(self._clear_audio)
         self.btn_clear_audio.setEnabled(False)

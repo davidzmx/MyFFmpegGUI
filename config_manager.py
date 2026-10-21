@@ -50,11 +50,58 @@ def get_app_icon_path() -> Optional[str]:
     return None
 
 
+def clean_file_path(path: str) -> str:
+    """
+    Limpia y normaliza rutas de archivo arrastradas desde exploradores de archivos
+    (KDE Dolphin, GNOME Nautilus, Thunar, PCManFM o Windows Explorer).
+    - Remueve el prefijo de URI 'file://' o 'file://localhost/'.
+    - Decodifica caracteres URL-encoded (por ejemplo, '%20' a espacios, '%C3%A1' a 'á').
+    - Elimina comillas envolventes ('...' o "..."), saltos de línea y retornos de carro.
+    - En Windows, ajusta '/C:/...' a 'C:/...'.
+    - Expande la tilde de usuario '~' y normaliza la ruta con os.path.normpath.
+    """
+    if not path:
+        return ""
+    if not isinstance(path, str):
+        path = str(path)
+
+    path = path.strip().replace("\r", "").replace("\n", "")
+    lines = [line.strip() for line in path.splitlines() if line.strip()]
+    if lines:
+        path = lines[0]
+
+    path = path.strip("'\"")
+
+    if path.startswith("file://"):
+        import urllib.parse
+        parsed = urllib.parse.urlparse(path)
+        path = urllib.parse.unquote(parsed.path)
+        if sys.platform == "win32" and path.startswith("/") and len(path) > 2 and path[2] == ":":
+            path = path[1:]
+    else:
+        if "%" in path:
+            try:
+                import urllib.parse
+                path = urllib.parse.unquote(path)
+            except Exception:
+                pass
+
+    path = path.strip("'\" \t\r\n")
+    if path:
+        try:
+            path = os.path.expanduser(path)
+            path = os.path.normpath(path)
+        except Exception:
+            pass
+    return path
+
+
 def open_path_in_os(target_path: str, is_directory: bool = False) -> bool:
     """
     Abre un archivo o carpeta en el explorador de archivos o reproductor predeterminado del SO.
     Compatible con Windows (os.startfile), Linux (xdg-open) y macOS (open).
     """
+    target_path = clean_file_path(target_path)
     if not target_path:
         return False
 
@@ -88,10 +135,10 @@ def open_path_in_os(target_path: str, is_directory: bool = False) -> bool:
             os.startfile(path)
             return True
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", path])
+            subprocess.Popen(["open", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
         else:
-            subprocess.Popen(["xdg-open", path])
+            subprocess.Popen(["xdg-open", path], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return True
     except Exception as e:
         print(f"Error al abrir en SO ({path}): {e}")
@@ -109,7 +156,7 @@ def make_clickable_folder_label(label, get_folder_fn):
         label.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
         label.setOpenExternalLinks(False)
         label.linkActivated.connect(lambda path: open_path_in_os(path, is_directory=True))
-        label.setToolTip("📁 Haz clic aquí para abrir esta carpeta en el explorador de archivos")
+        label.setToolTip("Haz clic aquí para abrir esta carpeta en el explorador de archivos")
 
         def on_mouse_press(event):
             folder = get_folder_fn()
@@ -141,7 +188,7 @@ def get_default_base_dir() -> str:
 DEFAULT_CONTEXT_ACTIONS = [
     {
         "id": "quick_mp3",
-        "name": "⚡ Rápido: Convertir a MP3",
+        "name": "Rápido: Convertir a MP3",
         "type": "quick",
         "command_template": 'ffmpeg -y -i "{input}" "{output_no_ext}.mp3"',
         "enabled": True,
@@ -150,7 +197,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "quick_wav",
-        "name": "⚡ Rápido: Convertir a WAV",
+        "name": "Rápido: Convertir a WAV",
         "type": "quick",
         "command_template": 'ffmpeg -y -i "{input}" "{output_no_ext}.wav"',
         "enabled": True,
@@ -159,7 +206,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "quick_audio_copy",
-        "name": "⚡ Rápido: Extraer Audio Original (Stream Copy)",
+        "name": "Rápido: Extraer Audio Original (Stream Copy)",
         "type": "quick",
         "command_template": 'ffmpeg -y -i "{input}" -vn -c:a copy "{output_no_ext}_audio.m4a"',
         "enabled": False,
@@ -168,7 +215,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "gui_audio",
-        "name": "🎵 Abrir en Conversor de Audio (MP3 / WAV)",
+        "name": "Abrir en Conversor de Audio (MP3 / WAV)",
         "type": "gui",
         "tab": "audio",
         "command_template": "",
@@ -178,7 +225,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "gui_video",
-        "name": "🎬 Abrir en Conversor de Video",
+        "name": "Abrir en Conversor de Video",
         "type": "gui",
         "tab": "video",
         "command_template": "",
@@ -188,7 +235,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "gui_frames",
-        "name": "🎞️ Abrir en Extractor de Fotogramas",
+        "name": "Abrir en Extractor de Fotogramas",
         "type": "gui",
         "tab": "frames",
         "command_template": "",
@@ -198,7 +245,7 @@ DEFAULT_CONTEXT_ACTIONS = [
     },
     {
         "id": "gui_segment",
-        "name": "✂️ Abrir en Segmentar Video",
+        "name": "Abrir en Segmentar Video",
         "type": "gui",
         "tab": "segment",
         "command_template": "",
@@ -207,8 +254,18 @@ DEFAULT_CONTEXT_ACTIONS = [
         "icon": "edit-cut"
     },
     {
+        "id": "gui_compare",
+        "name": "Abrir en Comparar Videos",
+        "type": "gui",
+        "tab": "compare",
+        "command_template": "",
+        "enabled": True,
+        "is_custom": False,
+        "icon": "video-x-generic"
+    },
+    {
         "id": "gui_main",
-        "name": "📂 Abrir en MyFFmpeg GUI",
+        "name": "Abrir en MyFFmpeg GUI",
         "type": "gui",
         "tab": None,
         "command_template": "",
@@ -223,6 +280,7 @@ def load_config() -> dict:
     default_cfg = {
         "ffmpeg_path": "",
         "ffprobe_path": "",
+        "ffplay_path": "",
         "base_output_dir": get_default_base_dir(),
         "auto_suggest_subfolders": True,
         "default_save_location": "same_folder",  # "same_folder" o "base_dir"
@@ -237,6 +295,11 @@ def load_config() -> dict:
                 # Asegurar que existan las acciones por defecto si faltan
                 if "context_menu_actions" not in data:
                     default_cfg["context_menu_actions"] = [dict(a) for a in DEFAULT_CONTEXT_ACTIONS]
+                else:
+                    # Limpiar emojis iniciales que causan cuadros vacíos [] en fuentes estándar
+                    for act in default_cfg["context_menu_actions"]:
+                        if "name" in act:
+                            act["name"] = re.sub(r'^[^\w\s\-:()]+', '', act["name"]).strip()
         except Exception:
             pass
     return default_cfg
@@ -343,6 +406,19 @@ def is_auto_suggest_subfolders() -> bool:
 def get_default_save_location() -> str:
     cfg = load_config()
     return cfg.get("default_save_location", "same_folder")
+
+
+def get_parallel_playback_pref() -> str:
+    """Devuelve el modo preferido de reproducción en paralelo ('integrated', 'dual', 'os', 'ask')."""
+    cfg = load_config()
+    return cfg.get("parallel_playback_pref", "integrated")
+
+
+def set_parallel_playback_pref(pref: str):
+    """Guarda el modo preferido de reproducción en paralelo."""
+    cfg = load_config()
+    cfg["parallel_playback_pref"] = pref
+    save_config(cfg)
 
 
 def ensure_dir_exists(directory: str):

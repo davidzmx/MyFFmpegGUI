@@ -6,9 +6,34 @@ Inspirado en interfaces modernas y elegantes.
 """
 
 import os
+import sys
+from pathlib import Path
 from PyQt5.QtGui import QPalette, QColor, QIcon
 
-DARK_THEME_QSS = """
+
+def _get_asset_path(filename: str) -> str:
+    """Devuelve la ruta absoluta normalizada (con forward slashes para QSS) a un archivo de assets."""
+    search_dirs = []
+    if getattr(sys, "_MEIPASS", None):
+        search_dirs.append(Path(sys._MEIPASS) / "assets")
+        search_dirs.append(Path(sys._MEIPASS))
+    search_dirs.append(Path(__file__).resolve().parent.parent / "assets")
+    search_dirs.append(Path.cwd() / "assets")
+
+    for d in search_dirs:
+        cand = d / filename
+        if cand.is_file():
+            return cand.as_posix()
+    def_path = (Path(__file__).resolve().parent.parent / "assets" / filename).resolve()
+    return def_path.as_posix()
+
+
+ARROW_DOWN_URL = _get_asset_path("arrow_down.svg")
+ARROW_DOWN_HOVER_URL = _get_asset_path("arrow_down_hover.svg")
+ARROW_UP_URL = _get_asset_path("arrow_up.svg")
+ARROW_UP_HOVER_URL = _get_asset_path("arrow_up_hover.svg")
+
+DARK_THEME_RAW_QSS = """
 /* Ventana principal, diálogos y explorador de archivos */
 QMainWindow, QDialog, QFileDialog {
     background-color: #13141f;
@@ -77,7 +102,7 @@ QGroupBox::title {
     color: #a5b4fc;
 }
 
-/* Inputs de texto y comboboxes con altura mínima garantizada */
+/* Inputs de texto, comboboxes y selectores numéricos con altura mínima garantizada */
 QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     background-color: #151624;
     border: 1px solid #3b3f63;
@@ -94,33 +119,40 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     background-color: #181a2e;
 }
 
-QLineEdit:disabled, QComboBox:disabled {
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
     background-color: #0f1019;
     color: #64748b;
     border-color: #23253a;
 }
 
+/* Listas desplegables (QComboBox) */
 QComboBox {
     padding-left: 8px;
-    padding-right: 26px;
+    padding-right: 28px;
 }
 
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 22px;
+    width: 24px;
     border-left: 1px solid #2d314d;
     border-top-right-radius: 6px;
     border-bottom-right-radius: 6px;
+    background-color: #1a1b2b;
+}
+
+QComboBox::drop-down:hover {
+    background-color: #242740;
 }
 
 QComboBox::down-arrow {
-    width: 0;
-    height: 0;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #94a3b8;
-    margin-right: 2px;
+    image: url(__ARROW_DOWN_URL__);
+    width: 12px;
+    height: 12px;
+}
+
+QComboBox::down-arrow:hover {
+    image: url(__ARROW_DOWN_HOVER_URL__);
 }
 
 QComboBox QAbstractItemView {
@@ -128,8 +160,74 @@ QComboBox QAbstractItemView {
     border: 1px solid #3b3f63;
     selection-background-color: #4f46e5;
     color: #f1f5f9;
-    padding: 4px;
-    min-height: 28px;
+    padding: 2px;
+    border-radius: 6px;
+    outline: none;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 24px;
+    padding: 4px 8px;
+}
+
+/* Selectores numéricos (QSpinBox y QDoubleSpinBox) */
+QSpinBox, QDoubleSpinBox {
+    padding-right: 26px;
+}
+
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left: 1px solid #2d314d;
+    border-bottom: 1px solid #2d314d;
+    border-top-right-radius: 5px;
+    background-color: #1a1b2b;
+}
+
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover {
+    background-color: #2e3252;
+}
+
+QSpinBox::up-button:pressed, QDoubleSpinBox::up-button:pressed {
+    background-color: #151624;
+}
+
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
+    image: url(__ARROW_UP_URL__);
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox::up-arrow:hover, QDoubleSpinBox::up-arrow:hover {
+    image: url(__ARROW_UP_HOVER_URL__);
+}
+
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: padding;
+    subcontrol-position: bottom right;
+    width: 20px;
+    border-left: 1px solid #2d314d;
+    border-bottom-right-radius: 5px;
+    background-color: #1a1b2b;
+}
+
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background-color: #2e3252;
+}
+
+QSpinBox::down-button:pressed, QDoubleSpinBox::down-button:pressed {
+    background-color: #151624;
+}
+
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
+    image: url(__ARROW_DOWN_URL__);
+    width: 10px;
+    height: 10px;
+}
+
+QSpinBox::down-arrow:hover, QDoubleSpinBox::down-arrow:hover {
+    image: url(__ARROW_DOWN_HOVER_URL__);
 }
 
 /* Botones */
@@ -475,6 +573,14 @@ QLabel#badge_lossless {
     font-weight: bold;
 }
 """
+
+DARK_THEME_QSS = (
+    DARK_THEME_RAW_QSS
+    .replace("__ARROW_DOWN_URL__", ARROW_DOWN_URL)
+    .replace("__ARROW_DOWN_HOVER_URL__", ARROW_DOWN_HOVER_URL)
+    .replace("__ARROW_UP_URL__", ARROW_UP_URL)
+    .replace("__ARROW_UP_HOVER_URL__", ARROW_UP_HOVER_URL)
+)
 
 
 def get_dark_palette() -> QPalette:

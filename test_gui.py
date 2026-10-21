@@ -230,8 +230,9 @@ class TestFFmpegSuite(unittest.TestCase):
         from ui.main_window import MainWindow
         win = MainWindow()
         self.assertIsNotNone(win)
-        # 7 pestañas completas
-        self.assertEqual(win.tabs.count(), 7)
+        # 8 pestañas completas
+        self.assertEqual(win.tabs.count(), 8)
+        win.close()
 
     def test_10_command_preview_and_base_folder_visibility(self):
         from ui.main_window import MainWindow
@@ -649,7 +650,211 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_18_video_comparison_and_metrics(self):
+        """Verifica la lógica de comparación de videos, filtros FFmpeg, cálculo SSIM/PSNR y UI de TabCompare."""
+        # 1. Crear un segundo video (comprimido/reducido) a partir de self.test_video
+        compressed_video = os.path.join(self.tmp_path, "sample_compressed.mp4")
+        cmd_comp = [
+            self.ffmpeg_path, "-y",
+            "-i", self.test_video,
+            "-vf", "scale=160:120",
+            "-c:v", "libx264", "-crf", "32",
+            "-c:a", "aac", "-b:a", "64k",
+            compressed_video
+        ]
+        res_comp = subprocess.run(cmd_comp, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_comp.returncode, 0, "No se pudo generar el video comprimido de prueba")
+
+        # 2. Probar construcción de comandos de comparación
+        out_split = os.path.join(self.tmp_path, "compare_split.mp4")
+        cmd_split = ffmpeg_core.build_compare_video_command(
+            self.ffmpeg_path, self.test_video, compressed_video, out_split, mode="split_screen"
+        )
+        self.assertIn("drawbox", "".join(cmd_split))
+        self.assertIn("crop", "".join(cmd_split))
+
+        out_sbs = os.path.join(self.tmp_path, "compare_sbs.mp4")
+        cmd_sbs = ffmpeg_core.build_compare_video_command(
+            self.ffmpeg_path, self.test_video, compressed_video, out_sbs, mode="side_by_side"
+        )
+        self.assertIn("hstack", "".join(cmd_sbs))
+
+        out_diff = os.path.join(self.tmp_path, "compare_diff.mp4")
+        cmd_diff = ffmpeg_core.build_compare_video_command(
+            self.ffmpeg_path, self.test_video, compressed_video, out_diff, mode="diff"
+        )
+        self.assertIn("blend=all_mode=difference", "".join(cmd_diff))
+
+        # 3. Probar ejecución real de generación de video comparativo (split_screen)
+        res_exec = subprocess.run(cmd_split, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_exec.returncode, 0, f"Error generando video comparativo: {res_exec.stderr.decode('utf-8')}")
+        self.assertTrue(os.path.isfile(out_split))
+
+        # 4. Probar comando y cálculo de métricas SSIM y PSNR reales
+        cmd_metrics = ffmpeg_core.build_compare_metrics_command(
+            self.ffmpeg_path, self.test_video, compressed_video
+        )
+        res_metrics = subprocess.run(cmd_metrics, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_metrics.returncode, 0)
+        logs = res_metrics.stderr.decode("utf-8", errors="replace").splitlines()
+
+        parsed = ffmpeg_core.parse_comparison_metrics(logs)
+        self.assertIsNotNone(parsed["ssim"])
+        self.assertIsNotNone(parsed["psnr"])
+        self.assertGreaterEqual(parsed["ssim"], 0.0)
+        self.assertLessEqual(parsed["ssim"], 1.0)
+        self.assertGreater(parsed["psnr"], 10.0)
+        self.assertIn("rating", parsed)
+
+        # 5. Probar parsing con mock text
+        mock_logs = [
+            "Parsed_ssim_1: SSIM Y:0.952100 (13.197022) U:0.970123 (15.247190) V:0.965432 (14.613892) All:0.958200 (13.789123)",
+            "Parsed_psnr_0: PSNR y:38.25 u:41.50 v:40.80 average:39.10 min:32.40 max:inf"
+        ]
+        parsed_mock = ffmpeg_core.parse_comparison_metrics(mock_logs)
+        self.assertAlmostEqual(parsed_mock["ssim"], 0.9582, places=4)
+        self.assertAlmostEqual(parsed_mock["psnr"], 39.10, places=2)
+        self.assertIn("Muy Buena", parsed_mock["rating"])
+
+        # 6. Probar integración en MainWindow y TabCompare
+        win = MainWindow(initial_tab="compare")
+        self.assertEqual(win.tabs.count(), 8)
+        compare_tab = win.tab_compare
+
+        # Cargar videos en la interfaz
+        compare_tab.input_a.set_path(self.test_video)
+        compare_tab.input_b.set_path(compressed_video)
+
+        # Verificar que se cargaron los metadatos y se actualizó la reducción de tamaño
+        self.assertIn("320x240", compare_tab.lbl_meta_a.text())
+        self.assertIn("160x120", compare_tab.lbl_meta_b.text())
+        self.assertTrue(compare_tab.btn_gen_compare.isEnabled())
+        self.assertTrue(compare_tab.btn_calc_metrics.isEnabled())
+        self.assertTrue(compare_tab.btn_play_both.isEnabled())
+        self.assertIn("Ahorro de tamaño", compare_tab.lbl_diff_summary.text())
+
+        # Probar cambio de modo en combo
+        compare_tab.combo_mode.setCurrentIndex(1)  # side_by_side
+        preview_text = compare_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("hstack", preview_text)
+
+        compare_tab.combo_mode.setCurrentIndex(2)  # diff
+        preview_diff = compare_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("blend=all_mode=difference", preview_diff)
+
+        # 7. Probar Arrastrar y Soltar (Drag & Drop) con URIs tipo file:// de Linux (Dolphin / Nautilus)
+        from PyQt5.QtCore import Qt, QMimeData, QUrl, QPoint
+        from PyQt5.QtGui import QDropEvent
+
+        uri_a = "file://" + self.test_video + "\r\n"
+        compare_tab.input_a.edit.setText(uri_a)
+        # Debe haberse limpiado automáticamente
+        self.assertEqual(compare_tab.input_a.get_path(), self.test_video)
+        self.assertIsNotNone(compare_tab.info_a)
+
+        # Probar dropEvent real en DropLineEdit
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(compressed_video)])
+        drop_evt = QDropEvent(QPoint(10, 10), Qt.CopyAction, mime, Qt.LeftButton, Qt.NoModifier)
+        compare_tab.input_b.edit.dropEvent(drop_evt)
+        self.assertEqual(compare_tab.input_b.get_path(), compressed_video)
+        self.assertIsNotNone(compare_tab.info_b)
+
+        # 8. Probar opciones de reproducción en paralelo (Sincronizada, Dos Ventanas, OS)
+        from ui.tab_compare import ParallelPlayDialog
+        dlg = ParallelPlayDialog(compare_tab, has_ffplay=True)
+        self.assertIsNotNone(dlg.btn_opt_sync)
+        self.assertIsNotNone(dlg.btn_opt_dual)
+        dlg.close()
+
+        # Probar comandos de ffplay en core
+        ffplay_p = ffmpeg_core.get_ffplay_path(self.ffmpeg_path)
+        self.assertIsNotNone(ffplay_p)
+
+        cmd_sync_ff = ffmpeg_core.build_compare_live_stream_command(
+            self.ffmpeg_path, self.test_video, compressed_video, mode="split_screen"
+        )
+        self.assertIn("nut", cmd_sync_ff)
+
+        cmd_a_dual, cmd_b_dual = ffmpeg_core.build_ffplay_dual_window_commands(
+            ffplay_p, self.test_video, compressed_video
+        )
+        self.assertIn("-window_title", cmd_a_dual)
+        self.assertIn("-window_title", cmd_b_dual)
+
+        # Probar ejecución de modo "os" con mock
+        opened_paths = []
+        orig_open = config_manager.open_path_in_os
+        config_manager.open_path_in_os = lambda p, is_directory=False: opened_paths.append(p)
+        config_manager.set_parallel_playback_pref("os")
+        try:
+            compare_tab._play_both()
+            self.assertIn(self.test_video, opened_paths)
+        finally:
+            config_manager.open_path_in_os = orig_open
+            config_manager.set_parallel_playback_pref("integrated")
+
+        # 9. Probar VideoComparePlayerDialog (Lienzo interactivo, cortina y controles)
+        from ui.compare_player import VideoComparePlayerDialog
+        player = VideoComparePlayerDialog(
+            None, video_a=self.test_video, video_b=compressed_video, ffmpeg_path=self.ffmpeg_path
+        )
+        self.assertIsNotNone(player.canvas)
+        self.assertEqual(player.canvas.mode, "split")
+        self.assertEqual(player.canvas.split_ratio, 0.5)
+
+        # Mover cortina divisoria
+        player.canvas.set_split_ratio(0.35)
+        self.assertAlmostEqual(player.canvas.split_ratio, 0.35, places=2)
+
+        # Alternar a modo Lado a Lado
+        player._set_mode("side_by_side")
+        self.assertEqual(player.canvas.mode, "side_by_side")
+        self.assertTrue(player.btn_mode_sbs.isChecked())
+        self.assertFalse(player.btn_mode_split.isChecked())
+
+        # Volver a modo dividido
+        player._set_mode("split")
+        self.assertEqual(player.canvas.mode, "split")
+        self.assertTrue(player.btn_mode_split.isChecked())
+
+        # Probar controles de velocidad y audio
+        player.combo_speed.setCurrentIndex(0)  # 0.5x
+        self.assertEqual(player.worker._speed, 0.5)
+
+        player.combo_audio.setCurrentIndex(1)  # Audio Video A
+        self.assertEqual(player.worker._audio_source, "a")
+        self.assertTrue(player.slider_volume.isEnabled())
+        self.assertTrue(player.btn_volume.isEnabled())
+
+        # Probar control de volumen y silenciado
+        player.slider_volume.setValue(75)
+        player._apply_volume_to_worker()
+        self.assertEqual(player.worker._volume, 75)
+        self.assertEqual(player.lbl_volume.text(), "75%")
+
+        player._toggle_mute()
+        self.assertEqual(player.slider_volume.value(), 0)
+
+        player._toggle_mute()
+        self.assertEqual(player.slider_volume.value(), 75)
+
+        # Silenciado desactiva controles de volumen
+        player.combo_audio.setCurrentIndex(0)
+        self.assertFalse(player.slider_volume.isEnabled())
+
+        # Probar paso de fotograma / salto
+        player.worker.step(1.0)
+        self.assertEqual(player.worker._seek_requested, 1.0)
+
+        # Cerrar el reproductor
+        player.close()
+        self.assertFalse(player.worker.isRunning())
+
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
