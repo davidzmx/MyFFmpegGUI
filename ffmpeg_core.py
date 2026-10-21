@@ -213,6 +213,14 @@ def get_media_info(filepath: str, ffprobe_path: Optional[str] = None) -> Dict[st
                         num, den = r_frame_rate.split("/")
                         if float(den) > 0:
                             info["fps"] = round(float(num) / float(den), 2)
+                    dar = st.get("display_aspect_ratio", "")
+                    if dar and ":" in dar:
+                        try:
+                            dnum, dden = dar.split(":")
+                            if float(dden) > 0 and float(dnum) > 0:
+                                info["dar"] = float(dnum) / float(dden)
+                        except Exception:
+                            pass
             elif codec_type == "audio":
                 info["audio_streams"].append(st)
                 if not info["audio_codec"]:

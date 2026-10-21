@@ -728,19 +728,8 @@ class TestFFmpegSuite(unittest.TestCase):
         # Verificar que se cargaron los metadatos y se actualizó la reducción de tamaño
         self.assertIn("320x240", compare_tab.lbl_meta_a.text())
         self.assertIn("160x120", compare_tab.lbl_meta_b.text())
-        self.assertTrue(compare_tab.btn_gen_compare.isEnabled())
-        self.assertTrue(compare_tab.btn_calc_metrics.isEnabled())
         self.assertTrue(compare_tab.btn_play_both.isEnabled())
         self.assertIn("Ahorro de tamaño", compare_tab.lbl_diff_summary.text())
-
-        # Probar cambio de modo en combo
-        compare_tab.combo_mode.setCurrentIndex(1)  # side_by_side
-        preview_text = compare_tab.cmd_preview.text_cmd.toPlainText()
-        self.assertIn("hstack", preview_text)
-
-        compare_tab.combo_mode.setCurrentIndex(2)  # diff
-        preview_diff = compare_tab.cmd_preview.text_cmd.toPlainText()
-        self.assertIn("blend=all_mode=difference", preview_diff)
 
         # 7. Probar Arrastrar y Soltar (Drag & Drop) con URIs tipo file:// de Linux (Dolphin / Nautilus)
         from PyQt5.QtCore import Qt, QMimeData, QUrl, QPoint

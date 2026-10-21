@@ -44,25 +44,27 @@ def format_timestamp(seconds: float) -> str:
     return f"{minutes:02d}:{secs:02d}"
 
 
-def create_volume_icon(muted: bool = False, color: str = "#f8fafc", size: int = 22) -> QIcon:
+def create_volume_icon(muted: bool = False, is_disabled: bool = False, color: str = "#f8fafc", size: int = 22) -> QIcon:
     """Genera un icono vectorial de volumen de alto contraste nítido y adaptable."""
     pix = QPixmap(size, size)
     pix.fill(Qt.transparent)
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.Antialiasing, True)
 
+    fill_color = "#475569" if is_disabled else ("#ef4444" if muted else color)
+
     path = QPainterPath()
     path.addRect(2.5, 7.5, 3.5, 7.0)
     poly = QPolygonF([QPointF(6.0, 7.5), QPointF(11.5, 3.5), QPointF(11.5, 18.5), QPointF(6.0, 14.5)])
     path.addPolygon(poly)
-    painter.fillPath(path, QColor(color))
+    painter.fillPath(path, QColor(fill_color))
 
-    if muted:
+    if muted and not is_disabled:
         pen = QPen(QColor("#ef4444"), 2.0, Qt.SolidLine, Qt.RoundCap)
         painter.setPen(pen)
         painter.drawLine(4, 4, 18, 18)
     else:
-        pen = QPen(QColor(color), 1.6, Qt.SolidLine, Qt.RoundCap)
+        pen = QPen(QColor(fill_color), 1.6, Qt.SolidLine, Qt.RoundCap)
         painter.setPen(pen)
         painter.drawArc(10, 6, 5, 10, -55 * 16, 110 * 16)
         painter.drawArc(11, 3, 8, 16, -55 * 16, 110 * 16)
@@ -475,7 +477,11 @@ class ComparePlaybackWorker(QThread):
         self._kill_process()
 
         w, h = self.render_w, self.render_h
-        filter_complex = f"[0:v]scale={w}:{h}[v0];[1:v]scale={w}:{h}[v1];[v0][v1]vstack"
+        filter_complex = (
+            f"[0:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:-1:-1:black[v0];"
+            f"[1:v]scale={w}:{h}:force_original_aspect_ratio=decrease,pad={w}:{h}:-1:-1:black[v1];"
+            f"[v0][v1]vstack"
+        )
 
         startupinfo = None
         creationflags = 0
@@ -683,6 +689,9 @@ class VideoComparePlayerDialog(QDialog):
         self.duration = max(self.info_a.get("duration", 0.0), self.info_b.get("duration", 0.0), 1.0)
         self.fps = self.info_a.get("fps", 0.0) or self.info_b.get("fps", 0.0) or 30.0
 
+        # Calcular resolución de renderizado respetando la relación de aspecto original del video
+        self.render_w, self.render_h = self._compute_render_resolution()
+
         self.is_seeking = False
         self._unmuted_volume = 100
         self._init_ui()
@@ -720,7 +729,16 @@ class VideoComparePlayerDialog(QDialog):
 
         h_top.addStretch()
 
-        res_str = f"{self.info_a.get('width', 0)}x{self.info_a.get('height', 0)} ({self.fps:.1f} fps)"
+        wa = self.info_a.get('width', 0)
+        ha = self.info_a.get('height', 0)
+        wb = self.info_b.get('width', 0)
+        hb = self.info_b.get('height', 0)
+        if wa > 0 and wb > 0 and (wa != wb or ha != hb):
+            res_str = f"A: {wa}x{ha} | B: {wb}x{hb} ({self.fps:.1f} fps)"
+        else:
+            base_w = wa or wb
+            base_h = ha or hb
+            res_str = f"{base_w}x{base_h} ({self.fps:.1f} fps)"
         lbl_tech = QLabel(res_str)
         lbl_tech.setStyleSheet("color: #94a3b8; font-size: 11px; background: #1e293b; padding: 2px 8px; border-radius: 4px;")
         h_top.addWidget(lbl_tech)
@@ -781,22 +799,25 @@ class VideoComparePlayerDialog(QDialog):
 
         # 4. Barra Inferior de Controles
         h_controls = QHBoxLayout()
-        h_controls.setSpacing(7)
+        h_controls.setSpacing(6)
+        h_controls.setContentsMargins(0, 0, 0, 0)
 
         # Botón Retroceder 1 segundo
         self.btn_step_back = QPushButton(self)
         self.btn_step_back.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekBackward))
         self.btn_step_back.setToolTip("Retroceder 1 segundo (Flecha Izquierda)")
+        self.btn_step_back.setFixedSize(30, 28)
         self.btn_step_back.clicked.connect(lambda: self.worker.step(-1.0))
         h_controls.addWidget(self.btn_step_back)
 
         # Botón Play / Pausa
         self.btn_play = QPushButton("Reproducir", self)
         self.btn_play.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
-        self.btn_play.setMinimumWidth(105)
+        self.btn_play.setMinimumWidth(92)
+        self.btn_play.setFixedHeight(28)
         self.btn_play.setStyleSheet(
-            "font-weight: bold; font-size: 12px; padding: 6px 10px; "
-            "background-color: #2563eb; color: white; border-radius: 6px;"
+            "font-weight: bold; font-size: 11px; padding: 4px 8px; "
+            "background-color: #2563eb; color: white; border-radius: 4px;"
         )
         self.btn_play.setToolTip("Reproducir / Pausar (Barra Espaciadora)")
         self.btn_play.clicked.connect(self._on_toggle_play)
@@ -806,6 +827,7 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_step_fwd = QPushButton(self)
         self.btn_step_fwd.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekForward))
         self.btn_step_fwd.setToolTip("Avanzar 1 segundo (Flecha Derecha)")
+        self.btn_step_fwd.setFixedSize(30, 28)
         self.btn_step_fwd.clicked.connect(lambda: self.worker.step(1.0))
         h_controls.addWidget(self.btn_step_fwd)
 
@@ -824,10 +846,11 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_mode_split = QPushButton("Dividida", self)
         self.btn_mode_split.setCheckable(True)
         self.btn_mode_split.setChecked(True)
+        self.btn_mode_split.setFixedHeight(28)
         self.btn_mode_split.setStyleSheet("""
             QPushButton {
                 background-color: #1e293b; color: #94a3b8; border: 1px solid #475569;
-                border-radius: 4px; padding: 5px 8px; font-size: 11px;
+                border-radius: 4px; padding: 4px 8px; font-size: 11px;
             }
             QPushButton:checked {
                 background-color: #0284c7; color: white; font-weight: bold; border: 1px solid #38bdf8;
@@ -839,10 +862,11 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_mode_sbs = QPushButton("Lado a Lado", self)
         self.btn_mode_sbs.setCheckable(True)
         self.btn_mode_sbs.setChecked(False)
+        self.btn_mode_sbs.setFixedHeight(28)
         self.btn_mode_sbs.setStyleSheet("""
             QPushButton {
                 background-color: #1e293b; color: #94a3b8; border: 1px solid #475569;
-                border-radius: 4px; padding: 5px 8px; font-size: 11px;
+                border-radius: 4px; padding: 4px 8px; font-size: 11px;
             }
             QPushButton:checked {
                 background-color: #0284c7; color: white; font-weight: bold; border: 1px solid #38bdf8;
@@ -852,17 +876,21 @@ class VideoComparePlayerDialog(QDialog):
         h_controls.addWidget(self.btn_mode_sbs)
 
         # Botón Centrar Cortina 50%
-        self.btn_center_divider = QPushButton("Centrar 50%", self)
-        self.btn_center_divider.setStyleSheet("font-size: 11px; padding: 5px 8px; color: #cbd5e1;")
+        self.btn_center_divider = QPushButton("Centrar", self)
+        self.btn_center_divider.setToolTip("Centrar línea divisoria al 50%")
+        self.btn_center_divider.setFixedHeight(28)
+        self.btn_center_divider.setStyleSheet("font-size: 11px; padding: 4px 8px; color: #cbd5e1;")
         self.btn_center_divider.clicked.connect(lambda: self.canvas.set_split_ratio(0.5))
         h_controls.addWidget(self.btn_center_divider)
 
         # Indicador porcentaje de divisor
         self.lbl_divider_pct = QLabel("50%")
+        self.lbl_divider_pct.setFixedWidth(28)
+        self.lbl_divider_pct.setAlignment(Qt.AlignCenter)
         self.lbl_divider_pct.setStyleSheet("color: #38bdf8; font-weight: bold; font-size: 11px;")
         h_controls.addWidget(self.lbl_divider_pct)
 
-        h_controls.addStretch()
+        h_controls.addStretch(1)
 
         # Selector de Audio
         lbl_audio = QLabel("Audio:")
@@ -873,12 +901,14 @@ class VideoComparePlayerDialog(QDialog):
         self.combo_audio.addItem("Silenciado", "none")
         self.combo_audio.addItem("Video A (Original)", "a")
         self.combo_audio.addItem("Video B (Procesado)", "b")
-        self.combo_audio.setMinimumWidth(145)
+        self.combo_audio.setFixedSize(160, 28)
         self.combo_audio.setMaxVisibleItems(5)
+        self.combo_audio.view().setMinimumWidth(165)
         self.combo_audio.setStyleSheet("""
             QComboBox {
-                min-width: 145px;
-                padding: 4px 22px 4px 8px;
+                min-width: 155px;
+                max-width: 165px;
+                padding: 3px 22px 3px 8px;
                 font-size: 11px;
                 background-color: #1e293b;
                 color: #f8fafc;
@@ -891,7 +921,7 @@ class VideoComparePlayerDialog(QDialog):
             QComboBox::drop-down {
                 subcontrol-origin: padding;
                 subcontrol-position: top right;
-                width: 20px;
+                width: 18px;
                 border-left: 1px solid #334155;
             }
             QComboBox::down-arrow {
@@ -925,7 +955,7 @@ class VideoComparePlayerDialog(QDialog):
 
         # Control de Volumen para Audio de los videos
         self.btn_volume = QPushButton(self)
-        self.btn_volume.setIcon(create_volume_icon(False))
+        self.btn_volume.setIcon(create_volume_icon(is_disabled=True))
         self.btn_volume.setToolTip("Silenciar / Reactivar Audio (M)")
         self.btn_volume.setFixedSize(28, 28)
         self.btn_volume.setStyleSheet("""
@@ -936,6 +966,9 @@ class VideoComparePlayerDialog(QDialog):
             QPushButton:hover {
                 background-color: #334155; border-color: #38bdf8;
             }
+            QPushButton:disabled {
+                background-color: #0f172a; border-color: #1e293b;
+            }
         """)
         self.btn_volume.clicked.connect(self._toggle_mute)
         h_controls.addWidget(self.btn_volume)
@@ -943,7 +976,7 @@ class VideoComparePlayerDialog(QDialog):
         self.slider_volume = ClickableSlider(Qt.Horizontal, self)
         self.slider_volume.setRange(0, 100)
         self.slider_volume.setValue(100)
-        self.slider_volume.setFixedWidth(70)
+        self.slider_volume.setFixedSize(60, 20)
         self.slider_volume.setToolTip("Nivel de volumen (0% - 100%)")
         self.slider_volume.setStyleSheet("""
             QSlider::groove:horizontal {
@@ -951,8 +984,17 @@ class VideoComparePlayerDialog(QDialog):
                 background: #334155;
                 border-radius: 2px;
             }
+            QSlider::groove:horizontal:disabled {
+                height: 5px;
+                background: #1e293b;
+                border-radius: 2px;
+            }
             QSlider::sub-page:horizontal {
                 background: #38bdf8;
+                border-radius: 2px;
+            }
+            QSlider::sub-page:horizontal:disabled {
+                background: #334155;
                 border-radius: 2px;
             }
             QSlider::handle:horizontal {
@@ -967,6 +1009,15 @@ class VideoComparePlayerDialog(QDialog):
             QSlider::handle:horizontal:hover {
                 background: #93c5fd;
             }
+            QSlider::handle:horizontal:disabled {
+                background: #475569;
+                border: 1px solid #334155;
+                width: 12px;
+                height: 12px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 6px;
+            }
         """)
         self.slider_volume.valueChanged.connect(self._on_volume_changed)
         self.slider_volume.sliderReleased.connect(self._on_volume_released)
@@ -974,30 +1025,35 @@ class VideoComparePlayerDialog(QDialog):
         h_controls.addWidget(self.slider_volume)
 
         self.lbl_volume = QLabel("100%", self)
-        self.lbl_volume.setStyleSheet("color: #64748b; font-size: 11px; min-width: 30px;")
+        self.lbl_volume.setFixedWidth(30)
+        self.lbl_volume.setStyleSheet("color: #475569; font-size: 11px;")
         h_controls.addWidget(self.lbl_volume)
 
         # Iniciar controles de volumen deshabilitados si audio es 'Silenciado'
         self.btn_volume.setEnabled(False)
         self.slider_volume.setEnabled(False)
 
-        # Selector de Velocidad
-        lbl_speed = QLabel("Velocidad:")
-        lbl_speed.setStyleSheet("color: #cbd5e1; font-size: 11px; font-weight: bold;")
-        h_controls.addWidget(lbl_speed)
+        # Separador vertical
+        sep2 = QFrame()
+        sep2.setFrameShape(QFrame.VLine)
+        sep2.setFixedWidth(1)
+        sep2.setStyleSheet("color: #334155;")
+        h_controls.addWidget(sep2)
 
+        # Selector de Velocidad
         self.combo_speed = QComboBox(self)
         self.combo_speed.addItem("0.5x", 0.5)
         self.combo_speed.addItem("1.0x", 1.0)
         self.combo_speed.addItem("1.5x", 1.5)
         self.combo_speed.addItem("2.0x", 2.0)
         self.combo_speed.setCurrentIndex(1)
-        self.combo_speed.setMinimumWidth(68)
+        self.combo_speed.setFixedSize(62, 28)
         self.combo_speed.setMaxVisibleItems(5)
+        self.combo_speed.setToolTip("Velocidad de reproducción (0.5x - 2.0x)")
         self.combo_speed.setStyleSheet("""
             QComboBox {
-                min-width: 68px;
-                padding: 4px 6px;
+                max-width: 62px;
+                padding: 3px 18px 3px 6px;
                 font-size: 11px;
                 background-color: #1e293b;
                 color: #f8fafc;
@@ -1047,13 +1103,14 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_fullscreen.setIcon(create_fullscreen_icon(False))
         self.btn_fullscreen.setIconSize(QSize(20, 20))
         self.btn_fullscreen.setToolTip("Alternar Pantalla Completa (F / F11 / Doble clic)")
+        self.btn_fullscreen.setFixedSize(30, 28)
         self.btn_fullscreen.setStyleSheet("""
             QPushButton {
                 background-color: #1e293b;
                 color: #f8fafc;
                 border: 1px solid #475569;
                 border-radius: 4px;
-                padding: 5px 8px;
+                padding: 2px;
             }
             QPushButton:hover {
                 background-color: #334155;
@@ -1076,6 +1133,49 @@ class VideoComparePlayerDialog(QDialog):
         QShortcut(QKeySequence(Qt.Key_V), self, self._toggle_mode_key)
         QShortcut(QKeySequence(Qt.Key_S), self, self._toggle_mode_key)
 
+    def _compute_render_resolution(self) -> Tuple[int, int]:
+        """
+        Calcula dimensiones de renderizado para el worker preservando la relación de aspecto
+        exacta del video (1:1, 4:3, 16:9, 9:16, etc.) sin estirar ni deformar la imagen.
+        """
+        wa = self.info_a.get("width", 0)
+        ha = self.info_a.get("height", 0)
+        wb = self.info_b.get("width", 0)
+        hb = self.info_b.get("height", 0)
+
+        dar_a = self.info_a.get("dar")
+        dar_b = self.info_b.get("dar")
+
+        if dar_a and dar_a > 0:
+            aspect = dar_a
+        elif wa > 0 and ha > 0:
+            aspect = wa / ha
+        elif dar_b and dar_b > 0:
+            aspect = dar_b
+        elif wb > 0 and hb > 0:
+            aspect = wb / hb
+        else:
+            aspect = 16.0 / 9.0
+
+        ref_w = wa if (wa > 0 and ha > 0) else (wb if (wb > 0 and hb > 0) else 1280)
+        ref_h = ha if (wa > 0 and ha > 0) else (hb if (wb > 0 and hb > 0) else 720)
+
+        max_w = 960
+        max_h = 720
+
+        if ref_w <= max_w and ref_h <= max_h:
+            target_w = ref_w
+            target_h = int(round(target_w / aspect)) if aspect > 0 else ref_h
+        else:
+            scale = min(max_w / ref_w, max_h / ref_h)
+            target_w = int(round(ref_w * scale))
+            target_h = int(round(target_w / aspect)) if aspect > 0 else int(round(ref_h * scale))
+
+        target_w = max(2, (target_w // 2) * 2)
+        target_h = max(2, (target_h // 2) * 2)
+
+        return target_w, target_h
+
     def _init_worker(self):
         """Inicia el motor de decodificación en segundo plano."""
         self.worker = ComparePlaybackWorker(
@@ -1084,6 +1184,8 @@ class VideoComparePlayerDialog(QDialog):
             video_b=self.video_b,
             duration=self.duration,
             fps=self.fps,
+            render_w=self.render_w,
+            render_h=self.render_h,
             parent=self
         )
         self.worker.frame_ready.connect(self._on_frame_ready)
@@ -1172,13 +1274,21 @@ class VideoComparePlayerDialog(QDialog):
         is_active = (source != "none")
         self.btn_volume.setEnabled(is_active)
         self.slider_volume.setEnabled(is_active)
-        self.lbl_volume.setStyleSheet(
-            f"color: {'#94a3b8' if is_active else '#64748b'}; font-size: 11px; min-width: 30px;"
-        )
+        if is_active:
+            is_muted = (self.slider_volume.value() == 0)
+            self.btn_volume.setIcon(create_volume_icon(muted=is_muted, is_disabled=False))
+            self.lbl_volume.setStyleSheet("color: #38bdf8; font-size: 11px;")
+        else:
+            self.btn_volume.setIcon(create_volume_icon(is_disabled=True))
+            self.lbl_volume.setStyleSheet("color: #475569; font-size: 11px;")
 
     def _on_volume_changed(self, value: int):
         self.lbl_volume.setText(f"{value}%")
-        self.btn_volume.setIcon(create_volume_icon(value == 0))
+        is_active = self.slider_volume.isEnabled()
+        if is_active:
+            self.btn_volume.setIcon(create_volume_icon(muted=(value == 0), is_disabled=False))
+        else:
+            self.btn_volume.setIcon(create_volume_icon(is_disabled=True))
         if value > 0:
             self._unmuted_volume = value
         self.vol_timer.start()
