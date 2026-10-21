@@ -93,6 +93,7 @@ class FFmpegWorker(QThread):
             speed_str = "1x"
             fps_str = "0"
 
+            recent_error_lines = []
             # FFmpeg escribe su progreso y estadísticas en stderr
             for line in self._process.stderr:
                 if self._is_cancelled:
@@ -101,6 +102,11 @@ class FFmpegWorker(QThread):
                 line_stripped = line.strip()
                 if line_stripped:
                     self.log_signal.emit(line_stripped)
+                    # Guardar líneas informativas para diagnóstico en caso de error (excluir líneas periódicas de frame=)
+                    if not line_stripped.startswith("frame=") and not line_stripped.startswith("size="):
+                        recent_error_lines.append(line_stripped)
+                        if len(recent_error_lines) > 20:
+                            recent_error_lines.pop(0)
 
                 # Buscar tiempo transcurrido
                 m_time = time_regex.search(line)
@@ -135,7 +141,19 @@ class FFmpegWorker(QThread):
                 self.finished_signal.emit(True, "¡Proceso finalizado con éxito!", self.output_path)
             else:
                 self.log_signal.emit(f"\n[ERROR FFmpeg: Código de salida {ret_code}]")
-                self.finished_signal.emit(False, f"FFmpeg finalizó con error (código {ret_code}). Revise los registros.", self.output_path)
+                # Extraer detalle útil de las últimas líneas de error
+                error_summary = ""
+                key_errors = [
+                    l for l in recent_error_lines
+                    if any(k in l.lower() for k in ["error", "no such", "invalid", "cannot", "failed", "impossible", "denied"])
+                ]
+                if key_errors:
+                    error_summary = "\n\n" + "\n".join(key_errors[-3:])
+                elif recent_error_lines:
+                    error_summary = "\n\n" + "\n".join(recent_error_lines[-2:])
+
+                err_msg = f"FFmpeg finalizó con error (código {ret_code}).{error_summary}"
+                self.finished_signal.emit(False, err_msg, self.output_path)
 
         except Exception as e:
             self.log_signal.emit(f"\n[EXCEPCIÓN]: {str(e)}")

@@ -287,15 +287,23 @@ class TabConcat(QWidget):
         first_path = first_item.text()
         p = Path(first_path)
 
+        # Limpiar sufijos típicos de fragmentación (_part_XXX, _segment_XXX, etc.) para que el video resultante
+        # y la subcarpeta sugerida tengan un nombre limpio (ej. "video_unido.mp4" y no "video_part_000_unido.mp4")
+        import re
+        clean_stem = re.sub(r'(_part_\d+|_segment_\d+|_fotograma_\d+|\bpart\d+|\bseg\d+)$', '', p.stem, flags=re.IGNORECASE).rstrip('_- ')
+        if not clean_stem:
+            clean_stem = p.stem
+        clean_path = str(p.parent / f"{clean_stem}{p.suffix}")
+
         if self.chk_use_base.isChecked():
             suggested = config_manager.suggest_output_path(
-                first_path,
+                clean_path,
                 suffix="_unido",
                 extension=p.suffix or ".mp4",
                 override_auto_subfolders=self.chk_subfolder.isChecked()
             )
         else:
-            suggested = str(p.parent / f"{p.stem}_unido{p.suffix}")
+            suggested = str(p.parent / f"{clean_stem}_unido{p.suffix}")
 
         self.output_selector.set_path(suggested)
         self._update_command_preview()
@@ -387,6 +395,11 @@ class TabConcat(QWidget):
             QMessageBox.warning(self, "Ruta de salida", "Especifique el archivo resultante.")
             return
 
+        # Crear carpeta de destino automáticamente si no existe en disco
+        out_dir = os.path.dirname(out_file)
+        if out_dir:
+            config_manager.ensure_dir_exists(out_dir)
+
         ffmpeg_path, _ = self.get_ffmpeg_paths()
         if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
             QMessageBox.critical(self, "FFmpeg no encontrado", "No se encontró el ejecutable FFmpeg.")
@@ -396,7 +409,7 @@ class TabConcat(QWidget):
         files = [self.list_widget.item(i).text() for i in range(count)]
 
         # Crear archivo temporal para concat demuxer
-        temp_dir = os.path.dirname(out_file) if os.path.isdir(os.path.dirname(out_file)) else tempfile.gettempdir()
+        temp_dir = out_dir if out_dir and os.path.isdir(out_dir) else tempfile.gettempdir()
         self.temp_list_file = os.path.join(temp_dir, f"concat_list_{os.getpid()}.txt")
         ffmpeg_core.create_concat_list_file(files, self.temp_list_file)
 

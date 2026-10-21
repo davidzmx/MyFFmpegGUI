@@ -438,7 +438,19 @@ class TestFFmpegSuite(unittest.TestCase):
         concat_tab._move_up()
         self.assertEqual(concat_tab.list_widget.item(0).text(), f2)
 
-        # 5. Probar limpieza
+        # 5. Probar que _update_output_suggestion limpia sufijos de fragmento (_part_XXX)
+        concat_tab._clear_list()
+        p1 = os.path.join(self.tmp_path, "vacaciones_part_001.mp4")
+        p2 = os.path.join(self.tmp_path, "vacaciones_part_002.mp4")
+        for p in [p1, p2]:
+            with open(p, "wb") as fp:
+                fp.write(b"dummy")
+        concat_tab._insert_paths([p1, p2])
+        out_suggested = concat_tab.output_selector.get_path()
+        self.assertIn("vacaciones_unido.mp4", out_suggested)
+        self.assertNotIn("part_001", out_suggested)
+
+        # 6. Probar limpieza
         concat_tab._clear_list()
         self.assertEqual(concat_tab.list_widget.count(), 0)
         self.assertIn("Seleccione los archivos", concat_tab.cmd_preview.text_cmd.toPlainText())

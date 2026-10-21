@@ -282,6 +282,11 @@ class TabCreateVideo(QWidget):
             QMessageBox.warning(self, "Ruta de salida", "Especifique el archivo de video resultante.")
             return
 
+        # Crear carpeta de destino automáticamente si no existe en disco
+        out_dir = os.path.dirname(out_video)
+        if out_dir:
+            config_manager.ensure_dir_exists(out_dir)
+
         ffmpeg_path, _ = self.get_ffmpeg_paths()
         if not ffmpeg_path or not os.path.isfile(ffmpeg_path):
             QMessageBox.critical(self, "FFmpeg no encontrado", "No se encontró el ejecutable FFmpeg.")
