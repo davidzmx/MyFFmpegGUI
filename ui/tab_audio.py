@@ -11,7 +11,9 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton
 )
-from ui.widgets import FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget
+from ui.widgets import (
+    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+)
 import ffmpeg_core
 import config_manager
 from ffmpeg_worker import FFmpegWorker
@@ -149,6 +151,10 @@ class TabAudio(QWidget):
         self.progress_widget = ProgressBarWithStatus(self)
         layout.addWidget(self.progress_widget)
 
+        # 5.5 Acciones post-generación (Abrir Audio / Abrir Carpeta)
+        self.output_actions = OutputActionsWidget(file_label="Abrir Audio Extraído", parent=self)
+        layout.addWidget(self.output_actions)
+
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Convertir a Audio", self)
         self.btn_run.setObjectName("btn_run")
@@ -192,7 +198,11 @@ class TabAudio(QWidget):
 
     def update_base_dir_display(self):
         base_dir = config_manager.get_base_output_dir()
-        self.lbl_base_info.setText(f"📁 <b>Carpeta Base actual:</b> <span style='color: #38bdf8;'>{base_dir}</span>")
+        self.lbl_base_info.setText(
+            f'📁 <b>Carpeta Base actual:</b> <a href="{base_dir}" style="color: #38bdf8; text-decoration: underline; font-weight: bold;">{base_dir}</a> '
+            f'<span style="color: #94a3b8; font-size: 11px;">(Haz clic para abrir)</span>'
+        )
+        config_manager.make_clickable_folder_label(self.lbl_base_info, config_manager.get_base_output_dir)
         self.radio_base_folder.setToolTip(f"Carpeta Base actual: {base_dir}")
         self.container_base_opts.setVisible(self.radio_base_folder.isChecked())
         self._update_output_suggestion()
@@ -315,6 +325,7 @@ class TabAudio(QWidget):
             keep_metadata=keep_meta
         )
 
+        self.output_actions.hide_output()
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.progress_widget.reset()
@@ -335,6 +346,21 @@ class TabAudio(QWidget):
         self.btn_cancel.setEnabled(False)
 
         if success:
-            QMessageBox.information(self, "Éxito", f"{message}\nGuardado en:\n{out_path}")
+            self.output_actions.show_output(out_path)
+
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Audio Convertido")
+            msg_box.setText(f"{message}\n\n<b>Guardado en:</b>\n{out_path}")
+            msg_box.setIcon(QMessageBox.Information)
+            btn_play = msg_box.addButton("▶ Abrir Audio", QMessageBox.ActionRole)
+            btn_folder = msg_box.addButton("📁 Abrir Carpeta", QMessageBox.ActionRole)
+            msg_box.addButton("Aceptar", QMessageBox.AcceptRole)
+            msg_box.exec_()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_play:
+                config_manager.open_path_in_os(out_path, is_directory=False)
+            elif clicked == btn_folder:
+                config_manager.open_path_in_os(out_path, is_directory=True)
         else:
             QMessageBox.warning(self, "Atención", message)

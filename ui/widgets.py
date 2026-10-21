@@ -321,3 +321,97 @@ class CommandPreviewWidget(QWidget):
             QApplication.clipboard().setText(self._current_cmd_str)
             self.btn_copy.setText("✓ ¡Copiado!")
             QTimer.singleShot(1500, lambda: self.btn_copy.setText("📋 Copiar Comando"))
+
+
+class OutputActionsWidget(QWidget):
+    """
+    Barra de acciones post-generación:
+    Permite abrir directamente el archivo generado o su carpeta contenedora en el explorador.
+    """
+    def __init__(self, file_label: str = "Abrir Video", parent=None):
+        super().__init__(parent)
+        self.file_label = file_label
+        self.current_path = ""
+        self.is_folder_only = False
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 4, 0, 4)
+        layout.setSpacing(10)
+
+        self.lbl_status = QLabel("✅ Listo:")
+        self.lbl_status.setStyleSheet("color: #4ade80; font-weight: bold; font-size: 12px;")
+
+        self.btn_open_file = QPushButton(f"▶ {file_label}")
+        self.btn_open_file.setCursor(Qt.PointingHandCursor)
+        self.btn_open_file.setStyleSheet("""
+            QPushButton {
+                background-color: #065f46;
+                color: #ecfdf5;
+                font-weight: bold;
+                border: 1px solid #10b981;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #047857;
+                border-color: #34d399;
+            }
+            QPushButton:pressed {
+                background-color: #064e3b;
+            }
+        """)
+        self.btn_open_file.clicked.connect(self._on_open_file)
+
+        self.btn_open_folder = QPushButton("📁 Abrir Carpeta Contenedora")
+        self.btn_open_folder.setCursor(Qt.PointingHandCursor)
+        self.btn_open_folder.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #38bdf8;
+                font-weight: bold;
+                border: 1px solid #0284c7;
+                border-radius: 6px;
+                padding: 6px 16px;
+                font-size: 12px;
+            }
+            QPushButton:hover {
+                background-color: #0369a1;
+                color: #ffffff;
+                border-color: #38bdf8;
+            }
+            QPushButton:pressed {
+                background-color: #0c4a6e;
+            }
+        """)
+        self.btn_open_folder.clicked.connect(self._on_open_folder)
+
+        layout.addWidget(self.lbl_status)
+        layout.addWidget(self.btn_open_file)
+        layout.addWidget(self.btn_open_folder)
+        layout.addStretch()
+
+        self.setVisible(False)
+
+    def show_output(self, path: str, is_folder_only: bool = False, custom_status: str = "✅ Proceso completado exitosamente:"):
+        self.current_path = path
+        self.is_folder_only = is_folder_only
+        self.lbl_status.setText(custom_status)
+        self.btn_open_file.setText(f"▶ {self.file_label}")
+        self.btn_open_file.setVisible(not is_folder_only and os.path.isfile(path))
+        self.btn_open_folder.setVisible(True)
+        self.setVisible(True)
+
+    def hide_output(self):
+        self.setVisible(False)
+        self.current_path = ""
+
+    def _on_open_file(self):
+        if self.current_path:
+            import config_manager
+            config_manager.open_path_in_os(self.current_path, is_directory=False)
+
+    def _on_open_folder(self):
+        if self.current_path:
+            import config_manager
+            config_manager.open_path_in_os(self.current_path, is_directory=True)

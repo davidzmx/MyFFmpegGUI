@@ -9,6 +9,7 @@ Manejo de Carpeta Base y Sugerencia de Carpetas automáticas.
 import os
 import sys
 import json
+import subprocess
 from pathlib import Path
 from typing import Tuple, Optional
 
@@ -47,6 +48,77 @@ def get_app_icon_path() -> Optional[str]:
             if candidate.is_file():
                 return str(candidate)
     return None
+
+
+def open_path_in_os(target_path: str, is_directory: bool = False) -> bool:
+    """
+    Abre un archivo o carpeta en el explorador de archivos o reproductor predeterminado del SO.
+    Compatible con Windows (os.startfile), Linux (xdg-open) y macOS (open).
+    """
+    if not target_path:
+        return False
+
+    path = os.path.abspath(target_path)
+    if is_directory:
+        if os.path.isfile(path):
+            path = os.path.dirname(path)
+        os.makedirs(path, exist_ok=True)
+    else:
+        if not os.path.exists(path):
+            parent = os.path.dirname(path)
+            if os.path.isdir(parent):
+                path = parent
+                is_directory = True
+            else:
+                return False
+
+    # 1. Intentar mediante la API nativa de Qt si está disponible
+    try:
+        from PyQt5.QtGui import QDesktopServices
+        from PyQt5.QtCore import QUrl
+        url = QUrl.fromLocalFile(path)
+        if QDesktopServices.openUrl(url):
+            return True
+    except Exception:
+        pass
+
+    # 2. Fallback a llamadas directas del SO
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+            return True
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+            return True
+        else:
+            subprocess.Popen(["xdg-open", path])
+            return True
+    except Exception as e:
+        print(f"Error al abrir en SO ({path}): {e}")
+        return False
+
+
+def make_clickable_folder_label(label, get_folder_fn):
+    """
+    Configura un QLabel que muestra una ruta de carpeta para que, al hacer clic
+    sobre el texto o el enlace, se abra automáticamente en el explorador de archivos.
+    """
+    try:
+        from PyQt5.QtCore import Qt
+        label.setCursor(Qt.PointingHandCursor)
+        label.setTextInteractionFlags(Qt.LinksAccessibleByMouse)
+        label.setOpenExternalLinks(False)
+        label.linkActivated.connect(lambda path: open_path_in_os(path, is_directory=True))
+        label.setToolTip("📁 Haz clic aquí para abrir esta carpeta en el explorador de archivos")
+
+        def on_mouse_press(event):
+            folder = get_folder_fn()
+            if folder:
+                open_path_in_os(folder, is_directory=True)
+
+        label.mousePressEvent = on_mouse_press
+    except Exception:
+        pass
 
 
 def get_default_base_dir() -> str:

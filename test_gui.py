@@ -445,6 +445,59 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_15_post_actions_and_resizable_splitter(self):
+        """Verifica el divisor redimensionable en TabConcat, OutputActionsWidget y etiquetas de carpeta base clicables."""
+        from PyQt5.QtWidgets import QSplitter, QLabel
+        from ui.widgets import OutputActionsWidget
+
+        win = MainWindow(initial_tab="concat")
+        concat_tab = win.tab_concat
+
+        # 1. Comprobar que TabConcat utiliza un QSplitter vertical y que la lista tiene altura mínima expandible
+        splitters = concat_tab.findChildren(QSplitter)
+        self.assertGreater(len(splitters), 0, "TabConcat debe contener un QSplitter para redimensionar la lista")
+        self.assertGreaterEqual(concat_tab.list_widget.minimumHeight(), 150)
+
+        # 2. Comprobar presencia de OutputActionsWidget en las pestañas principales
+        for tab_name, tab_obj in [
+            ("concat", win.tab_concat),
+            ("create", win.tab_create),
+            ("convert", win.tab_convert),
+            ("segment", win.tab_segment),
+            ("audio", win.tab_audio),
+            ("extract", win.tab_extract),
+        ]:
+            self.assertTrue(hasattr(tab_obj, "output_actions"), f"{tab_name} debe tener output_actions")
+            self.assertIsInstance(tab_obj.output_actions, OutputActionsWidget)
+            self.assertFalse(tab_obj.output_actions.isVisible(), f"{tab_name}.output_actions debe iniciar oculto")
+
+            # Comprobar que la etiqueta de carpeta base contiene enlace HTML clicable
+            if hasattr(tab_obj, "lbl_base_info"):
+                self.assertIn("Carpeta Base actual:", tab_obj.lbl_base_info.text())
+                self.assertIn("<a href=", tab_obj.lbl_base_info.text())
+
+        # 3. Comprobar funcionamiento de OutputActionsWidget
+        actions_w = OutputActionsWidget(file_label="Abrir Video")
+        dummy_file = os.path.join(self.tmp_path, "test_out.mp4")
+        with open(dummy_file, "w") as f:
+            f.write("content")
+
+        actions_w.show_output(dummy_file)
+        self.assertTrue(actions_w.isVisible())
+        self.assertTrue(actions_w.btn_open_file.isVisible())
+        self.assertTrue(actions_w.btn_open_folder.isVisible())
+        self.assertEqual(actions_w.btn_open_file.text(), "▶ Abrir Video")
+
+        actions_w.hide_output()
+        self.assertFalse(actions_w.isVisible())
+
+        # 4. Comprobar helpers de apertura segura
+        res_dir = config_manager.open_path_in_os(self.tmp_path, is_directory=True)
+        # En entorno sin display real (offscreen), puede devolver False o lanzar xdg-open/QDesktopServices sin error
+        self.assertIsInstance(res_dir, bool)
+
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()

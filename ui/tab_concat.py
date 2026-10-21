@@ -9,10 +9,13 @@ import tempfile
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
-    QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox
+    QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox,
+    QSplitter, QSizePolicy
 )
 from PyQt5.QtCore import Qt
-from ui.widgets import FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget
+from ui.widgets import (
+    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+)
 import ffmpeg_core
 import config_manager
 from ffmpeg_worker import FFmpegWorker
@@ -56,13 +59,21 @@ class TabConcat(QWidget):
         self.temp_list_file = None
 
         layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        layout.setSpacing(8)
+        layout.setContentsMargins(4, 4, 4, 4)
 
-        # 1. Lista interactiva de segmentos
-        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial)")
+        # Divisor vertical interactivo (Splitter) para permitir redimensionar la lista de segmentos
+        self.splitter = QSplitter(Qt.Vertical, self)
+        self.splitter.setChildrenCollapsible(False)
+
+        # 1. Lista interactiva de segmentos (Panel superior)
+        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial - Ajustable arrastrando la barra divisoria)")
         layout_list = QVBoxLayout(group_list)
+        layout_list.setSpacing(8)
 
         self.list_widget = SegmentListWidget(on_files_dropped=self._insert_paths, parent=self)
+        self.list_widget.setMinimumHeight(160)
+        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout_list.addWidget(self.list_widget)
 
         # Botones de gestión de lista
@@ -97,7 +108,13 @@ class TabConcat(QWidget):
         self.lbl_count.setObjectName("lbl_meta")
         layout_list.addWidget(self.lbl_count)
 
-        layout.addWidget(group_list)
+        self.splitter.addWidget(group_list)
+
+        # Contenedor inferior para opciones, comandos y consola
+        bottom_panel = QWidget(self)
+        layout_bottom = QVBoxLayout(bottom_panel)
+        layout_bottom.setContentsMargins(0, 0, 0, 0)
+        layout_bottom.setSpacing(10)
 
         # 2. Configuración de unión
         group_opts = QGroupBox("2. Modo de Unión")
@@ -122,7 +139,7 @@ class TabConcat(QWidget):
         )
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
-        layout.addWidget(group_opts)
+        layout_bottom.addWidget(group_opts)
 
         # 3. Archivo Resultante
         group_out = QGroupBox("3. Archivo Final Unificado")
@@ -153,15 +170,19 @@ class TabConcat(QWidget):
         )
         self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
         layout_out.addWidget(self.output_selector)
-        layout.addWidget(group_out)
+        layout_bottom.addWidget(group_out)
 
         # 4. Vista Previa del Comando FFmpeg
         self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout.addWidget(self.cmd_preview)
+        layout_bottom.addWidget(self.cmd_preview)
 
         # 5. Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout.addWidget(self.progress_widget)
+        layout_bottom.addWidget(self.progress_widget)
+
+        # 5.5 Acciones post-generación (Abrir Video / Abrir Carpeta)
+        self.output_actions = OutputActionsWidget(file_label="Abrir Video Unido", parent=self)
+        layout_bottom.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Unir Segmentos", self)
@@ -175,11 +196,20 @@ class TabConcat(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout.addLayout(h_btn_layout)
+        layout_bottom.addLayout(h_btn_layout)
 
         # 6. Consola
         self.log_console = LogConsole(self)
-        layout.addWidget(self.log_console, 1)
+        layout_bottom.addWidget(self.log_console, 1)
+
+        self.splitter.addWidget(bottom_panel)
+
+        # Proporciones iniciales: 250px para la lista, 450px para el panel inferior
+        self.splitter.setSizes([250, 450])
+        self.splitter.setStretchFactor(0, 2)
+        self.splitter.setStretchFactor(1, 3)
+
+        layout.addWidget(self.splitter)
 
         self.update_base_dir_display()
 
@@ -196,7 +226,11 @@ class TabConcat(QWidget):
 
     def update_base_dir_display(self):
         base_dir = config_manager.get_base_output_dir()
-        self.lbl_base_info.setText(f"📁 <b>Carpeta Base actual:</b> <span style='color: #38bdf8;'>{base_dir}</span>")
+        self.lbl_base_info.setText(
+            f'📁 <b>Carpeta Base actual:</b> <a href="{base_dir}" style="color: #38bdf8; text-decoration: underline; font-weight: bold;">{base_dir}</a> '
+            f'<span style="color: #94a3b8; font-size: 11px;">(Haz clic para abrir)</span>'
+        )
+        config_manager.make_clickable_folder_label(self.lbl_base_info, config_manager.get_base_output_dir)
         use_base = self.chk_use_base.isChecked()
         self.lbl_base_info.setVisible(use_base)
         self.chk_subfolder.setVisible(use_base)
@@ -374,6 +408,7 @@ class TabConcat(QWidget):
             mode=mode
         )
 
+        self.output_actions.hide_output()
         self.btn_run.setEnabled(False)
         self.btn_cancel.setEnabled(True)
         self.progress_widget.reset()
@@ -402,6 +437,22 @@ class TabConcat(QWidget):
             self.temp_list_file = None
 
         if success:
-            QMessageBox.information(self, "Videos Unidos", f"{message}\nArchivo resultante:\n{out_path}")
+            self.output_actions.show_output(out_path)
+
+            # Cuadro informativo interactivo con opciones de abrir
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Videos Unidos")
+            msg_box.setText(f"{message}\n\n<b>Archivo resultante:</b>\n{out_path}")
+            msg_box.setIcon(QMessageBox.Information)
+            btn_play = msg_box.addButton("▶ Abrir Video", QMessageBox.ActionRole)
+            btn_folder = msg_box.addButton("📁 Abrir Carpeta", QMessageBox.ActionRole)
+            msg_box.addButton("Aceptar", QMessageBox.AcceptRole)
+            msg_box.exec_()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_play:
+                config_manager.open_path_in_os(out_path, is_directory=False)
+            elif clicked == btn_folder:
+                config_manager.open_path_in_os(out_path, is_directory=True)
         else:
             QMessageBox.warning(self, "Atención", message)

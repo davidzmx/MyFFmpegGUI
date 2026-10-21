@@ -189,9 +189,31 @@ class TabSettings(QWidget):
         h_rad.addStretch()
         layout_base.addLayout(h_rad)
 
+        h_base_desc = QHBoxLayout()
         lbl_base_desc = QLabel("Ruta de la Carpeta Base predeterminada:")
         lbl_base_desc.setStyleSheet("color: #94a3b8; font-size: 12px;")
-        layout_base.addWidget(lbl_base_desc)
+        btn_open_base = QPushButton("📁 Abrir en Explorador")
+        btn_open_base.setToolTip("Abrir la carpeta base actual en el explorador de archivos del sistema")
+        btn_open_base.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #38bdf8;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                color: #7dd3fc;
+            }
+        """)
+        btn_open_base.setCursor(Qt.PointingHandCursor)
+        btn_open_base.clicked.connect(lambda: config_manager.open_path_in_os(self.folder_base.get_path(), is_directory=True))
+        h_base_desc.addWidget(lbl_base_desc)
+        h_base_desc.addStretch()
+        h_base_desc.addWidget(btn_open_base)
+        layout_base.addLayout(h_base_desc)
 
         self.folder_base = FolderSelector("Seleccione la carpeta base de salida...")
         layout_base.addWidget(self.folder_base)
