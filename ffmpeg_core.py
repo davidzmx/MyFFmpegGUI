@@ -460,12 +460,12 @@ def build_segment_command(
     input_file: str,
     output_pattern: str,
     segment_duration_sec: int = 15,
-    mode: str = "copy"  # "copy" (sin recodificar, ultra rápido) o "exact" (fuerza keyframes para corte exacto con CRF 17)
+    mode: str = "exact"  # Por defecto: "exact" (corte exacto al segundo con CRF 17) o "copy" (copia directa)
 ) -> List[str]:
     """
     Construye el comando para dividir un video en segmentos de duración configurable.
+    - 'exact': Fuerza keyframe en cada múltiplo de segmento para longitud exacta sin pérdida visual (predeterminado).
     - 'copy': Modo directo sin pérdida de calidad (-c copy) cortando en keyframes.
-    - 'exact': Fuerza keyframe en cada múltiplo de segmento para longitud exacta sin pérdida visual.
     """
     cmd = [ffmpeg_path, "-y", "-i", input_file]
 
@@ -503,11 +503,21 @@ def build_concat_command(
     list_file_path: str = None,
     output_file: str = "",
     mode: str = "copy",  # "copy" (demuxer concat sin recodificar) o "reencode" (si provienen de formatos distintos)
-    concat_list_file: str = None
+    concat_list_file: str = None,
+    audio_file: Optional[str] = None,
+    audio_mode: str = "replace",  # "replace", "mix", "add_track"
+    shortest: bool = True
 ) -> List[str]:
     """
-    Construye el comando para unir segmentos.
+    Construye el comando para unir segmentos con soporte opcional para incorporar o mezclar pista de audio.
     - 'copy': Modo demuxer concat sin pérdida y sin recodificación.
+    - 'reencode': Recodificación con libx264 CRF 17.
+    - audio_file: Archivo de audio externo (MP3, WAV, AAC, etc.) a incorporar al archivo unificado.
+    - audio_mode:
+        * 'replace': Reemplaza el audio existente o añade audio al video unificado.
+        * 'mix': Mezcla el audio existente de los videos con el audio externo.
+        * 'add_track': Conserva el audio original y añade el nuevo audio como segunda pista.
+    - shortest: Corta el audio si es más largo que el video unido para evitar fotograma congelado.
     """
     actual_list = list_file_path or concat_list_file or ""
     cmd = [
@@ -517,14 +527,55 @@ def build_concat_command(
         "-i", actual_list
     ]
 
-    if mode == "copy":
-        cmd.extend(["-c", "copy"])
+    has_audio = bool(audio_file and str(audio_file).strip())
+    if has_audio:
+        cmd.extend(["-i", str(audio_file).strip()])
+
+    if not has_audio:
+        if mode == "copy":
+            cmd.extend(["-c", "copy"])
+        else:
+            # Re-encodificación de alta fidelidad si los códecs fueran heterogéneos
+            cmd.extend([
+                "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "256k"
+            ])
     else:
-        # Re-encodificación de alta fidelidad si los códecs fueran heterogéneos
-        cmd.extend([
-            "-c:v", "libx264", "-crf", "17", "-preset", "fast",
-            "-c:a", "aac", "-b:a", "256k"
-        ])
+        # Modo con audio incorporado
+        if mode == "copy":
+            v_codec = ["-c:v", "copy"]
+        else:
+            v_codec = ["-c:v", "libx264", "-crf", "17", "-preset", "fast"]
+
+        if audio_mode == "mix":
+            # Mezclar audio original de los segmentos con la nueva pista de audio
+            cmd.extend([
+                "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                "-map", "0:v:0",
+                "-map", "[aout]"
+            ])
+            cmd.extend(v_codec)
+            cmd.extend(["-c:a", "aac", "-b:a", "256k"])
+        elif audio_mode == "add_track":
+            # Añadir como pista secundaria de audio
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-map", "1:a:0"
+            ])
+            cmd.extend(v_codec)
+            cmd.extend(["-c:a", "aac", "-b:a", "256k"])
+        else:
+            # "replace": Reemplaza audio de los segmentos o añade audio al video unificado
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "1:a:0"
+            ])
+            cmd.extend(v_codec)
+            cmd.extend(["-c:a", "aac", "-b:a", "256k"])
+
+        if shortest:
+            cmd.append("-shortest")
 
     cmd.append(output_file)
     return cmd

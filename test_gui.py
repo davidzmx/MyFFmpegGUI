@@ -513,6 +513,142 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_16_segment_default_and_concat_audio(self):
+        """Verifica que 'Corte Exacto' sea la opción predeterminada en Segmentar Video
+        y que Unir Segmentos soporte incorporar pista de audio (replace, mix, add_track)."""
+        win = MainWindow(initial_tab="segment")
+
+        # 1. Comprobar que en TabSegment la opción por defecto sea 'exact' (Corte Exacto)
+        seg_tab = win.tab_segment
+        self.assertEqual(seg_tab.combo_mode.currentIndex(), 0)
+        self.assertEqual(seg_tab.combo_mode.currentData(), "exact")
+        self.assertIn("Corte Exacto", seg_tab.combo_mode.currentText())
+
+        # Comprobar que build_segment_command utiliza 'exact' por defecto
+        cmd_default_seg = ffmpeg_core.build_segment_command(
+            self.ffmpeg_path, self.test_video, "part_%03d.mp4"
+        )
+        self.assertIn("libx264", cmd_default_seg)
+        self.assertIn("17", cmd_default_seg)
+
+        # 2. Comprobar controles de audio en TabConcat
+        concat_tab = win.tab_concat
+        self.assertTrue(hasattr(concat_tab, "audio_selector"))
+        self.assertTrue(hasattr(concat_tab, "btn_clear_audio"))
+        self.assertTrue(hasattr(concat_tab, "combo_audio_mode"))
+        self.assertTrue(hasattr(concat_tab, "chk_shortest"))
+
+        # Iniciar sin audio: widget de opciones oculto y botón limpiar deshabilitado
+        self.assertFalse(concat_tab.btn_clear_audio.isEnabled())
+        self.assertFalse(concat_tab.widget_audio_opts.isVisible())
+
+        # 3. Comprobar generación de comandos de concat con audio
+        dummy_list = os.path.join(self.tmp_path, "dummy_list.txt")
+        dummy_audio = os.path.join(self.tmp_path, "bg_music.mp3")
+        dummy_out = os.path.join(self.tmp_path, "output_with_audio.mp4")
+
+        # Modo replace (por defecto con audio)
+        cmd_replace = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            dummy_list,
+            dummy_out,
+            mode="copy",
+            audio_file=dummy_audio,
+            audio_mode="replace",
+            shortest=True
+        )
+        self.assertIn("-i", cmd_replace)
+        self.assertIn(dummy_audio, cmd_replace)
+        self.assertIn("-map", cmd_replace)
+        self.assertIn("0:v:0", cmd_replace)
+        self.assertIn("1:a:0", cmd_replace)
+        self.assertIn("-shortest", cmd_replace)
+
+        # Modo mix (mezclar con amix)
+        cmd_mix = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            dummy_list,
+            dummy_out,
+            mode="copy",
+            audio_file=dummy_audio,
+            audio_mode="mix",
+            shortest=True
+        )
+        self.assertIn("-filter_complex", cmd_mix)
+        self.assertTrue(any("amix" in arg for arg in cmd_mix))
+
+        # Modo add_track (pista secundaria)
+        cmd_track = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            dummy_list,
+            dummy_out,
+            mode="copy",
+            audio_file=dummy_audio,
+            audio_mode="add_track",
+            shortest=True
+        )
+        self.assertIn("0:a?", cmd_track)
+        self.assertIn("1:a:0", cmd_track)
+
+        # 4. Probar ejecución real de concat con pista de audio incorporada
+        # Generar pista de audio sintética de 4 segundos
+        music_file = os.path.join(self.tmp_path, "sample_audio.mp3")
+        subprocess.run([
+            self.ffmpeg_path, "-y",
+            "-f", "lavfi", "-i", "sine=frequency=330:duration=4",
+            "-c:a", "libmp3lame", music_file
+        ], check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        # Segmentar test_video en 2 partes
+        seg_pat = os.path.join(self.tmp_path, "seg_audio_%03d.mp4")
+        subprocess.run(ffmpeg_core.build_segment_command(
+            self.ffmpeg_path, self.test_video, seg_pat, segment_duration_sec=2, mode="exact"
+        ), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        segments = sorted([
+            os.path.join(self.tmp_path, f)
+            for f in os.listdir(self.tmp_path)
+            if f.startswith("seg_audio_") and f.endswith(".mp4")
+        ])
+        real_list = os.path.join(self.tmp_path, "real_concat_list.txt")
+        ffmpeg_core.create_concat_list_file(segments, real_list)
+
+        out_final = os.path.join(self.tmp_path, "final_unified_with_audio.mp4")
+        cmd_exec = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            real_list,
+            out_final,
+            mode="copy",
+            audio_file=music_file,
+            audio_mode="replace",
+            shortest=True
+        )
+        res_exec = subprocess.run(cmd_exec, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_exec.returncode, 0, f"Error en concat con audio: {res_exec.stderr.decode('utf-8')}")
+        self.assertTrue(os.path.isfile(out_final))
+
+        # Verificar con ffprobe que el video resultante contiene video y audio
+        info = ffmpeg_core.get_media_info(out_final, self.ffprobe_path)
+        self.assertEqual(info["video_codec"], "h264")
+        self.assertEqual(info["audio_codec"], "aac")
+        self.assertGreater(info["duration"], 3.0)
+
+        # 5. Probar interacción UI en TabConcat
+        concat_tab._insert_paths(segments)
+        concat_tab.audio_selector.set_path(music_file)
+        self.assertTrue(concat_tab.btn_clear_audio.isEnabled())
+        self.assertFalse(concat_tab.widget_audio_opts.isHidden())
+        self.assertIn(music_file, concat_tab.cmd_preview.text_cmd.toPlainText())
+
+        # Limpiar audio con el botón
+        concat_tab.btn_clear_audio.click()
+        self.assertEqual(concat_tab.audio_selector.get_path(), "")
+        self.assertFalse(concat_tab.btn_clear_audio.isEnabled())
+        self.assertTrue(concat_tab.widget_audio_opts.isHidden())
+        self.assertNotIn(music_file, concat_tab.cmd_preview.text_cmd.toPlainText())
+
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()

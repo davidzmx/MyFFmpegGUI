@@ -69,17 +69,18 @@ class TabSegment(QWidget):
         h_mode.addWidget(QLabel("Método de corte:"))
         self.combo_mode = QComboBox()
         self.combo_mode.addItem(
-            "Copia Directa (Stream Copy - 100% Sin Pérdida, Ultra Rápido)", "copy"
+            "Corte Exacto al Segundo (Fuerza Keyframes, Visualmente Idéntico CRF 17 - Predeterminado)", "exact"
         )
         self.combo_mode.addItem(
-            "Corte Exacto al Segundo (Fuerza Keyframes, Visualmente Idéntico CRF 17)", "exact"
+            "Copia Directa (Stream Copy - 100% Sin Pérdida, Ultra Rápido)", "copy"
         )
+        self.combo_mode.setCurrentIndex(0)
         h_mode.addWidget(self.combo_mode, 1)
         layout_opts.addLayout(h_mode)
 
         lbl_desc = QLabel(
-            "• Stream Copy: Mantiene exactamente los bits y códecs originales sin procesar. Corta en keyframes.\n"
-            "• Corte Exacto: Garantiza la duración exacta al segundo insertando keyframes sin pérdida perceptible."
+            "• Corte Exacto (Predeterminado): Garantiza la duración exacta al segundo insertando keyframes sin pérdida perceptible.\n"
+            "• Stream Copy: Mantiene exactamente los bits y códecs originales sin procesar. Corta en keyframes más cercanos."
         )
         lbl_desc.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_desc)

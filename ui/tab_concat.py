@@ -147,8 +147,55 @@ class TabConcat(QWidget):
         layout_opts.addWidget(lbl_note)
         layout_middle.addWidget(group_opts)
 
-        # 2.2 Archivo Final Unificado
-        group_out = QGroupBox("3. Archivo Final Unificado")
+        # 2.2 Pista de Audio Opcional para el Video Unido
+        group_audio = QGroupBox("3. Pista de Audio Opcional (Música / Voz / Banda Sonora)")
+        layout_audio = QVBoxLayout(group_audio)
+
+        h_audio_top = QHBoxLayout()
+        self.audio_selector = FileSelector(
+            placeholder="Opcional: Seleccione o arrastre un archivo de audio (MP3, WAV, AAC, M4A, FLAC)...",
+            file_filter="Archivos de Audio (*.mp3 *.wav *.aac *.m4a *.flac *.ogg *.wma *.opus);;Todos (*.*)"
+        )
+        self.audio_selector.file_selected.connect(self._on_audio_file_changed)
+        h_audio_top.addWidget(self.audio_selector, 1)
+
+        self.btn_clear_audio = QPushButton("Quitar Audio")
+        self.btn_clear_audio.setToolTip("Quitar la pista de audio seleccionada")
+        self.btn_clear_audio.clicked.connect(self._clear_audio)
+        self.btn_clear_audio.setEnabled(False)
+        h_audio_top.addWidget(self.btn_clear_audio)
+        layout_audio.addLayout(h_audio_top)
+
+        # Opciones avanzadas de audio
+        self.widget_audio_opts = QWidget()
+        h_audio_opts = QHBoxLayout(self.widget_audio_opts)
+        h_audio_opts.setContentsMargins(0, 0, 0, 0)
+        h_audio_opts.addWidget(QLabel("Modo de audio:"))
+        self.combo_audio_mode = QComboBox()
+        self.combo_audio_mode.addItem("Reemplazar audio de los videos (o añadir si son mudos)", "replace")
+        self.combo_audio_mode.addItem("Mezclar con el audio original de los videos", "mix")
+        self.combo_audio_mode.addItem("Añadir como pista secundaria de audio", "add_track")
+        self.combo_audio_mode.currentIndexChanged.connect(lambda _: self._update_command_preview())
+        h_audio_opts.addWidget(self.combo_audio_mode, 1)
+
+        self.chk_shortest = QCheckBox("Ajustar al final del video (cortar audio sobrante)")
+        self.chk_shortest.setChecked(True)
+        self.chk_shortest.setToolTip("Si el audio es más largo que el video unido, corta el audio para que el video no se quede congelado.")
+        self.chk_shortest.stateChanged.connect(lambda _: self._update_command_preview())
+        h_audio_opts.addWidget(self.chk_shortest)
+
+        self.widget_audio_opts.setVisible(False)
+        layout_audio.addWidget(self.widget_audio_opts)
+
+        lbl_audio_note = QLabel(
+            "• El video se une a máxima velocidad sin pérdida (Stream Copy) y el audio se sincroniza en AAC de alta fidelidad."
+        )
+        lbl_audio_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout_audio.addWidget(lbl_audio_note)
+        layout_middle.addWidget(group_audio)
+
+        # 2.3 Archivo Final Unificado
+        group_out = QGroupBox("4. Archivo Final Unificado")
         layout_out = QVBoxLayout(group_out)
 
         h_sub_opt = QHBoxLayout()
@@ -330,6 +377,16 @@ class TabConcat(QWidget):
         self.output_selector.set_path(suggested)
         self._update_command_preview()
 
+    def _on_audio_file_changed(self, path: str):
+        has_file = bool(path and path.strip())
+        self.btn_clear_audio.setEnabled(has_file)
+        self.widget_audio_opts.setVisible(has_file)
+        self._update_command_preview()
+
+    def _clear_audio(self):
+        self.audio_selector.set_path("")
+        self._on_audio_file_changed("")
+
     def _update_command_preview(self):
         count = self.list_widget.count()
         out_video = self.output_selector.get_path()
@@ -340,12 +397,20 @@ class TabConcat(QWidget):
         ffmpeg_path, _ = self.get_ffmpeg_paths()
         target_out = out_video if out_video else "video_unido.mp4"
         mode = self.combo_mode.currentData() if hasattr(self, "combo_mode") else "copy"
+
+        audio_path = self.audio_selector.get_path() if hasattr(self, "audio_selector") else ""
+        audio_mode = self.combo_audio_mode.currentData() if hasattr(self, "combo_audio_mode") else "replace"
+        shortest = self.chk_shortest.isChecked() if hasattr(self, "chk_shortest") else True
+
         try:
             cmd = ffmpeg_core.build_concat_command(
                 ffmpeg_path=ffmpeg_path or "ffmpeg",
                 list_file_path="/ruta/lista_segmentos.txt",
                 output_file=target_out,
-                mode=mode
+                mode=mode,
+                audio_file=audio_path if audio_path else None,
+                audio_mode=audio_mode,
+                shortest=shortest
             )
             self.cmd_preview.set_command(cmd)
         except Exception as e:
@@ -435,12 +500,24 @@ class TabConcat(QWidget):
         self.temp_list_file = os.path.join(temp_dir, f"concat_list_{os.getpid()}.txt")
         ffmpeg_core.create_concat_list_file(files, self.temp_list_file)
 
+        # Validar archivo de audio opcional si fue especificado
+        audio_file = self.audio_selector.get_path() if hasattr(self, "audio_selector") else ""
+        if audio_file and not os.path.isfile(audio_file):
+            QMessageBox.warning(self, "Archivo de audio no encontrado", f"El archivo de audio especificado no existe:\n{audio_file}")
+            return
+
         mode = self.combo_mode.currentData()
+        audio_mode = self.combo_audio_mode.currentData() if hasattr(self, "combo_audio_mode") else "replace"
+        shortest = self.chk_shortest.isChecked() if hasattr(self, "chk_shortest") else True
+
         cmd = ffmpeg_core.build_concat_command(
             ffmpeg_path=ffmpeg_path,
             list_file_path=self.temp_list_file,
             output_file=out_file,
-            mode=mode
+            mode=mode,
+            audio_file=audio_file if audio_file else None,
+            audio_mode=audio_mode,
+            shortest=shortest
         )
 
         self.output_actions.hide_output()
