@@ -668,18 +668,23 @@ def setup_tab_console_layout(
     form_widget: QWidget,
     cmd_title: str = "Comando FFmpeg a ejecutar:",
     initial_bottom_sizes: list = None,
-    initial_side_sizes: list = None
+    initial_side_sizes: list = None,
+    wrap_in_scroll: bool = True
 ):
     """
     Configura de manera uniforme el divisor QSplitter y el panel de comando y consola
     en una pestaña dada.
     """
-    # 1. ScrollArea para el formulario de opciones
-    scroll_form = QScrollArea(tab_widget)
-    scroll_form.setWidgetResizable(True)
-    scroll_form.setWidget(form_widget)
-    scroll_form.setFrameShape(QScrollArea.NoFrame)
-    tab_widget.scroll_form = scroll_form
+    if wrap_in_scroll:
+        # ScrollArea para el formulario de opciones
+        scroll_form = QScrollArea(tab_widget)
+        scroll_form.setWidgetResizable(True)
+        scroll_form.setWidget(form_widget)
+        scroll_form.setFrameShape(QScrollArea.NoFrame)
+        tab_widget.scroll_form = scroll_form
+        content_pane = scroll_form
+    else:
+        content_pane = form_widget
 
     # 2. Panel unificado de comando y consola
     console_panel = ConsoleOutputPanel(cmd_title, tab_widget)
@@ -690,7 +695,7 @@ def setup_tab_console_layout(
     # 3. Divisor QSplitter
     splitter = QSplitter(tab_widget)
     splitter.setChildrenCollapsible(False)
-    splitter.addWidget(scroll_form)
+    splitter.addWidget(content_pane)
     splitter.addWidget(console_panel)
     tab_widget.splitter = splitter
     tab_widget.splitter_console = splitter
@@ -771,6 +776,9 @@ def setup_tab_console_layout(
         console_panel.set_position_mode(pos)
         console_panel.setVisible(bool(visible))
         btn_show_console.setVisible(not bool(visible))
+
+        if hasattr(tab_widget, "on_console_panel_settings_changed"):
+            tab_widget.on_console_panel_settings_changed(pos, bool(visible))
 
     tab_widget.apply_console_panel_settings = apply_settings
     apply_settings()

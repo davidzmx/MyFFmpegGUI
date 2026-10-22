@@ -59,65 +59,61 @@ class TabConcat(QWidget):
         self.worker = None
         self.temp_list_file = None
 
-        form_widget = QWidget()
-        form_layout = QVBoxLayout(form_widget)
-        form_layout.setContentsMargins(4, 4, 4, 4)
-        form_layout.setSpacing(10)
-
-        # 1. Lista interactiva de segmentos
-        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial)")
+        # 1. Lista interactiva de segmentos (Panel superior de contenido - Redimensionable mediante divisor)
+        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial - Redimensionable)")
+        group_list.setMinimumHeight(110)
         layout_list = QVBoxLayout(group_list)
         layout_list.setSpacing(6)
 
         self.list_widget = SegmentListWidget(on_files_dropped=self._insert_paths, parent=self)
-        self.list_widget.setMinimumHeight(80)
-        self.list_widget.setMaximumHeight(180)
-        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        layout_list.addWidget(self.list_widget)
+        self.list_widget.setMinimumHeight(60)
+        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout_list.addWidget(self.list_widget, 1)
 
-        # Botones de gestión de lista en dos filas compactas y flexibles
-        grid_tools = QGridLayout()
-        grid_tools.setSpacing(6)
+        # Botones de gestión de lista
+        self.btn_add_files = QPushButton("Añadir Archivos...")
+        self.btn_add_files.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
+        self.btn_add_files.clicked.connect(self._add_files)
 
-        btn_add_files = QPushButton("Añadir Archivos...")
-        btn_add_files.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
-        btn_add_files.clicked.connect(self._add_files)
+        self.btn_add_folder = QPushButton("Añadir Carpeta...")
+        self.btn_add_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
+        self.btn_add_folder.clicked.connect(self._add_folder)
 
-        btn_add_folder = QPushButton("Añadir Carpeta...")
-        btn_add_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
-        btn_add_folder.clicked.connect(self._add_folder)
+        self.btn_clear = QPushButton("Limpiar Todo")
+        self.btn_clear.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
+        self.btn_clear.clicked.connect(self._clear_list)
 
-        btn_clear = QPushButton("Limpiar Todo")
-        btn_clear.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
-        btn_clear.clicked.connect(self._clear_list)
+        self.btn_up = QPushButton("Subir")
+        self.btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
+        self.btn_up.clicked.connect(self._move_up)
 
-        btn_up = QPushButton("Subir")
-        btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
-        btn_up.clicked.connect(self._move_up)
+        self.btn_down = QPushButton("Bajar")
+        self.btn_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
+        self.btn_down.clicked.connect(self._move_down)
 
-        btn_down = QPushButton("Bajar")
-        btn_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
-        btn_down.clicked.connect(self._move_down)
+        self.btn_remove = QPushButton("Eliminar")
+        self.btn_remove.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
+        self.btn_remove.clicked.connect(self._remove_selected)
 
-        btn_remove = QPushButton("Eliminar")
-        btn_remove.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
-        btn_remove.clicked.connect(self._remove_selected)
-
-        grid_tools.addWidget(btn_add_files, 0, 0)
-        grid_tools.addWidget(btn_add_folder, 0, 1)
-        grid_tools.addWidget(btn_clear, 0, 2)
-        grid_tools.addWidget(btn_up, 1, 0)
-        grid_tools.addWidget(btn_down, 1, 1)
-        grid_tools.addWidget(btn_remove, 1, 2)
-        layout_list.addLayout(grid_tools)
+        self.tools_container = QWidget()
+        layout_list.addWidget(self.tools_container)
 
         self.lbl_count = QLabel("Total: 0 segmentos seleccionados")
         self.lbl_count.setObjectName("lbl_meta")
         layout_list.addWidget(self.lbl_count)
 
-        form_layout.addWidget(group_list)
+        # 2. Panel Central de Opciones y Configuración (con scroll interno fluido)
+        middle_scroll = QScrollArea(self)
+        middle_scroll.setWidgetResizable(True)
+        middle_scroll.setFrameShape(QFrame.NoFrame)
+        middle_scroll.setMinimumHeight(100)
 
-        # 2. Modo de Unión
+        middle_container = QWidget()
+        layout_middle = QVBoxLayout(middle_container)
+        layout_middle.setContentsMargins(0, 4, 0, 4)
+        layout_middle.setSpacing(10)
+
+        # 2.1 Modo de Unión
         group_opts = QGroupBox("2. Modo de Unión")
         layout_opts = QVBoxLayout(group_opts)
 
@@ -140,9 +136,9 @@ class TabConcat(QWidget):
         )
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
-        form_layout.addWidget(group_opts)
+        layout_middle.addWidget(group_opts)
 
-        # 3. Pista de Audio Opcional para el Video Unido
+        # 2.2 Pista de Audio Opcional para el Video Unido
         group_audio = QGroupBox("3. Pista de Audio Opcional (Música / Voz / Banda Sonora)")
         layout_audio = QVBoxLayout(group_audio)
 
@@ -188,9 +184,9 @@ class TabConcat(QWidget):
         )
         lbl_audio_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_audio.addWidget(lbl_audio_note)
-        form_layout.addWidget(group_audio)
+        layout_middle.addWidget(group_audio)
 
-        # 4. Archivo Final Unificado
+        # 2.3 Archivo Final Unificado
         group_out = QGroupBox("4. Archivo Final Unificado")
         layout_out = QVBoxLayout(group_out)
 
@@ -227,14 +223,14 @@ class TabConcat(QWidget):
         )
         self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
         layout_out.addWidget(self.output_selector)
-        form_layout.addWidget(group_out)
+        layout_middle.addWidget(group_out)
 
-        # 5. Progreso y Acciones
+        # 2.4 Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        form_layout.addWidget(self.progress_widget)
+        layout_middle.addWidget(self.progress_widget)
 
         self.output_actions = OutputActionsWidget(file_label="Abrir Video Unido", parent=self)
-        form_layout.addWidget(self.output_actions)
+        layout_middle.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Unir Segmentos", self)
@@ -248,12 +244,64 @@ class TabConcat(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        form_layout.addLayout(h_btn_layout)
-        form_layout.addStretch()
+        layout_middle.addLayout(h_btn_layout)
+
+        middle_scroll.setWidget(middle_container)
+
+        # Divisor vertical interactivo entre la Lista de Segmentos y las Opciones
+        self.content_splitter = QSplitter(Qt.Vertical, self)
+        self.content_splitter.setChildrenCollapsible(False)
+        self.content_splitter.addWidget(group_list)
+        self.content_splitter.addWidget(middle_scroll)
+        self.content_splitter.setSizes([200, 320])
+        self.content_splitter.setStretchFactor(0, 2)
+        self.content_splitter.setStretchFactor(1, 3)
+
+        # Inicializar botones en fila única o dos filas según configuración inicial
+        is_visible = config_manager.get_console_panel_visible()
+        pos = config_manager.get_console_panel_position()
+        self._update_tools_layout(single_row=(not is_visible) or (pos == "bottom"))
 
         # Configurar panel de consola y comando (ocultable / inferior o lateral)
-        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
+        setup_tab_console_layout(self, self.content_splitter, "Comando FFmpeg a ejecutar:", wrap_in_scroll=False)
         self.update_base_dir_display()
+
+    def _update_tools_layout(self, single_row: bool):
+        """Organiza los botones en una sola fila (cuando la terminal no está visible o abajo) o en dos filas compactas (lateral)."""
+        old_layout = self.tools_container.layout()
+        if old_layout is not None:
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                if item.widget():
+                    item.widget().setParent(None)
+            from PyQt5.QtWidgets import QWidget
+            QWidget().setLayout(old_layout)
+
+        if single_row:
+            h_layout = QHBoxLayout(self.tools_container)
+            h_layout.setContentsMargins(0, 0, 0, 0)
+            h_layout.setSpacing(6)
+            h_layout.addWidget(self.btn_add_files)
+            h_layout.addWidget(self.btn_add_folder)
+            h_layout.addWidget(self.btn_up)
+            h_layout.addWidget(self.btn_down)
+            h_layout.addWidget(self.btn_remove)
+            h_layout.addWidget(self.btn_clear)
+        else:
+            grid = QGridLayout(self.tools_container)
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setSpacing(6)
+            grid.addWidget(self.btn_add_files, 0, 0)
+            grid.addWidget(self.btn_add_folder, 0, 1)
+            grid.addWidget(self.btn_clear, 0, 2)
+            grid.addWidget(self.btn_up, 1, 0)
+            grid.addWidget(self.btn_down, 1, 1)
+            grid.addWidget(self.btn_remove, 1, 2)
+
+    def on_console_panel_settings_changed(self, pos: str, visible: bool):
+        """Ajusta la fila de botones según la visibilidad y posición de la terminal."""
+        single_row = (not visible) or (pos == "bottom")
+        self._update_tools_layout(single_row)
 
     def _update_count(self):
         count = self.list_widget.count()

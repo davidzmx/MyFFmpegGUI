@@ -469,11 +469,26 @@ class TestFFmpegSuite(unittest.TestCase):
         win = MainWindow(initial_tab="concat")
         concat_tab = win.tab_concat
 
-        # 1. Comprobar que TabConcat utiliza un QSplitter vertical de 3 secciones (lista, controles, terminal)
+        # 1. Comprobar que TabConcat utiliza un QSplitter para redimensionar la lista
         splitters = concat_tab.findChildren(QSplitter)
         self.assertGreater(len(splitters), 0, "TabConcat debe contener un QSplitter")
-        self.assertGreaterEqual(concat_tab.splitter.count(), 2, "El splitter debe contener las secciones de contenido y panel de salida")
+        self.assertTrue(hasattr(concat_tab, "content_splitter"), "TabConcat debe tener content_splitter para redimensionar la lista")
+        self.assertEqual(concat_tab.content_splitter.count(), 2)
+        self.assertGreaterEqual(concat_tab.splitter.count(), 2, "El splitter principal debe contener las secciones de contenido y panel de salida")
         self.assertGreater(concat_tab.list_widget.minimumHeight(), 0)
+
+        # Verificar que los botones estén en una sola fila si la terminal no está visible
+        from PyQt5.QtWidgets import QHBoxLayout, QGridLayout
+        win.sync_console_panels(visible=False)
+        self.assertIsInstance(concat_tab.tools_container.layout(), QHBoxLayout, "Los botones deben estar en 1 fila si la terminal está oculta")
+
+        # Verificar que los botones pasen a 2 filas compactas si la terminal está visible en lateral
+        win.sync_console_panels(pos="side", visible=True)
+        self.assertIsInstance(concat_tab.tools_container.layout(), QGridLayout, "Los botones deben ser compactos en modo lateral")
+
+        # Verificar que vuelvan a 1 fila en modo inferior
+        win.sync_console_panels(pos="bottom", visible=True)
+        self.assertIsInstance(concat_tab.tools_container.layout(), QHBoxLayout, "Los botones deben estar en 1 fila en modo inferior")
 
         # 2. Comprobar presencia de OutputActionsWidget en las pestañas principales
         for tab_name, tab_obj in [
