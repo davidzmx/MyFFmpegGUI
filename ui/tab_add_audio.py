@@ -111,6 +111,12 @@ class TabAddAudio(QWidget):
 
         layout_opts.addLayout(grid_opts)
 
+        self.lbl_mode_explanation = QLabel(
+            "💡 Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
+        )
+        self.lbl_mode_explanation.setStyleSheet("color: #a5b4fc; font-size: 11px;")
+        layout_opts.addWidget(self.lbl_mode_explanation)
+
         self.lbl_audio_warning = QLabel("")
         self.lbl_audio_warning.setStyleSheet("color: #f59e0b; font-size: 11px;")
         self.lbl_audio_warning.setVisible(False)
@@ -279,8 +285,24 @@ class TabAddAudio(QWidget):
         self._on_audio_selected("")
 
     def _on_audio_mode_changed(self):
+        self._update_mode_explanation()
         self._check_audio_warning()
         self._update_command_preview()
+
+    def _update_mode_explanation(self):
+        mode = self.combo_audio_mode.currentData()
+        if mode == "mix":
+            self.lbl_mode_explanation.setText(
+                "💡 Modo Mezcla: Funde el audio original del video con la nueva pista en una sola (ambos audios sonarán simultáneamente)."
+            )
+        elif mode == "add_track":
+            self.lbl_mode_explanation.setText(
+                "💡 Modo Pista Secundaria: Conserva el audio original (Pista 1) y añade el nuevo como pista adicional (Pista 2, seleccionable en el reproductor; no suenan a la vez)."
+            )
+        else:
+            self.lbl_mode_explanation.setText(
+                "💡 Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
+            )
 
     def _check_audio_warning(self):
         mode = self.combo_audio_mode.currentData()

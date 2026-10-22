@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QLabel, QScrollArea, QStyle
+    QTabWidget, QLabel, QScrollArea, QStyle, QApplication
 )
 from PyQt5.QtGui import QIcon
 from PyQt5.QtCore import Qt
@@ -38,7 +38,19 @@ class MainWindow(QMainWindow):
         if icon_path:
             self.setWindowIcon(QIcon(icon_path))
 
-        self.resize(1000, 780)
+        # Tamaño inicial adaptativo y centrado para asegurar que todas las pestañas se muestren completas
+        screen = QApplication.primaryScreen()
+        if screen:
+            avail = screen.availableGeometry()
+            init_w = min(1180, max(980, avail.width() - 40))
+            init_h = min(800, max(640, avail.height() - 60))
+            self.resize(init_w, init_h)
+            # Centrar en la pantalla
+            geo = self.frameGeometry()
+            geo.moveCenter(avail.center())
+            self.move(geo.topLeft())
+        else:
+            self.resize(1180, 800)
         self.setMinimumSize(960, 640)
 
         # Contenedor central
