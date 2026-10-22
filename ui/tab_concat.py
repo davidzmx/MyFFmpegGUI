@@ -8,14 +8,14 @@ import os
 import tempfile
 from pathlib import Path
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
+    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox,
     QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle
 )
 from PyQt5.QtCore import Qt
 from ui.widgets import (
     FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
-    ConsoleOutputPanel
+    ConsoleOutputPanel, setup_tab_console_layout
 )
 import ffmpeg_core
 import config_manager
@@ -59,27 +59,26 @@ class TabConcat(QWidget):
         self.worker = None
         self.temp_list_file = None
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(0)
-        layout.setContentsMargins(6, 6, 6, 6)
+        form_widget = QWidget()
+        form_layout = QVBoxLayout(form_widget)
+        form_layout.setContentsMargins(4, 4, 4, 4)
+        form_layout.setSpacing(10)
 
-        # Divisor vertical interactivo de 3 secciones (Lista, Controles, Terminal)
-        self.splitter = QSplitter(Qt.Vertical, self)
-        self.splitter.setChildrenCollapsible(False)
-
-        # 1. Lista interactiva de segmentos (Panel superior - Redimensionable)
-        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial - Redimensionable arrastrando barra divisoria)")
-        group_list.setMinimumHeight(110)
+        # 1. Lista interactiva de segmentos
+        group_list = QGroupBox("1. Lista de Segmentos a Unir (Orden Secuencial)")
         layout_list = QVBoxLayout(group_list)
-        layout_list.setSpacing(8)
+        layout_list.setSpacing(6)
 
         self.list_widget = SegmentListWidget(on_files_dropped=self._insert_paths, parent=self)
-        self.list_widget.setMinimumHeight(60)
-        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        layout_list.addWidget(self.list_widget, 1)
+        self.list_widget.setMinimumHeight(80)
+        self.list_widget.setMaximumHeight(180)
+        self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        layout_list.addWidget(self.list_widget)
 
-        # Botones de gestión de lista
-        h_tools = QHBoxLayout()
+        # Botones de gestión de lista en dos filas compactas y flexibles
+        grid_tools = QGridLayout()
+        grid_tools.setSpacing(6)
+
         btn_add_files = QPushButton("Añadir Archivos...")
         btn_add_files.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
         btn_add_files.clicked.connect(self._add_files)
@@ -87,6 +86,10 @@ class TabConcat(QWidget):
         btn_add_folder = QPushButton("Añadir Carpeta...")
         btn_add_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         btn_add_folder.clicked.connect(self._add_folder)
+
+        btn_clear = QPushButton("Limpiar Todo")
+        btn_clear.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
+        btn_clear.clicked.connect(self._clear_list)
 
         btn_up = QPushButton("Subir")
         btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
@@ -100,36 +103,21 @@ class TabConcat(QWidget):
         btn_remove.setIcon(self.style().standardIcon(QStyle.SP_TrashIcon))
         btn_remove.clicked.connect(self._remove_selected)
 
-        btn_clear = QPushButton("Limpiar Todo")
-        btn_clear.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
-        btn_clear.clicked.connect(self._clear_list)
-
-        h_tools.addWidget(btn_add_files)
-        h_tools.addWidget(btn_add_folder)
-        h_tools.addWidget(btn_up)
-        h_tools.addWidget(btn_down)
-        h_tools.addWidget(btn_remove)
-        h_tools.addWidget(btn_clear)
-        layout_list.addLayout(h_tools)
+        grid_tools.addWidget(btn_add_files, 0, 0)
+        grid_tools.addWidget(btn_add_folder, 0, 1)
+        grid_tools.addWidget(btn_clear, 0, 2)
+        grid_tools.addWidget(btn_up, 1, 0)
+        grid_tools.addWidget(btn_down, 1, 1)
+        grid_tools.addWidget(btn_remove, 1, 2)
+        layout_list.addLayout(grid_tools)
 
         self.lbl_count = QLabel("Total: 0 segmentos seleccionados")
         self.lbl_count.setObjectName("lbl_meta")
         layout_list.addWidget(self.lbl_count)
 
-        self.splitter.addWidget(group_list)
+        form_layout.addWidget(group_list)
 
-        # 2. Panel Central: Opciones, Salida, Previa y Botones (Con scroll interno fluido)
-        middle_scroll = QScrollArea(self)
-        middle_scroll.setWidgetResizable(True)
-        middle_scroll.setFrameShape(QFrame.NoFrame)
-        middle_scroll.setMinimumHeight(120)
-
-        middle_container = QWidget()
-        layout_middle = QVBoxLayout(middle_container)
-        layout_middle.setContentsMargins(0, 4, 0, 4)
-        layout_middle.setSpacing(10)
-
-        # 2.1 Modo de Unión
+        # 2. Modo de Unión
         group_opts = QGroupBox("2. Modo de Unión")
         layout_opts = QVBoxLayout(group_opts)
 
@@ -152,9 +140,9 @@ class TabConcat(QWidget):
         )
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
-        layout_middle.addWidget(group_opts)
+        form_layout.addWidget(group_opts)
 
-        # 2.2 Pista de Audio Opcional para el Video Unido
+        # 3. Pista de Audio Opcional para el Video Unido
         group_audio = QGroupBox("3. Pista de Audio Opcional (Música / Voz / Banda Sonora)")
         layout_audio = QVBoxLayout(group_audio)
 
@@ -200,9 +188,9 @@ class TabConcat(QWidget):
         )
         lbl_audio_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_audio.addWidget(lbl_audio_note)
-        layout_middle.addWidget(group_audio)
+        form_layout.addWidget(group_audio)
 
-        # 2.3 Archivo Final Unificado
+        # 4. Archivo Final Unificado
         group_out = QGroupBox("4. Archivo Final Unificado")
         layout_out = QVBoxLayout(group_out)
 
@@ -239,14 +227,14 @@ class TabConcat(QWidget):
         )
         self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
         layout_out.addWidget(self.output_selector)
-        layout_middle.addWidget(group_out)
+        form_layout.addWidget(group_out)
 
-        # 2.4 Progreso y Acciones
+        # 5. Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout_middle.addWidget(self.progress_widget)
+        form_layout.addWidget(self.progress_widget)
 
         self.output_actions = OutputActionsWidget(file_label="Abrir Video Unido", parent=self)
-        layout_middle.addWidget(self.output_actions)
+        form_layout.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Unir Segmentos", self)
@@ -260,98 +248,11 @@ class TabConcat(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout_middle.addLayout(h_btn_layout)
+        form_layout.addLayout(h_btn_layout)
+        form_layout.addStretch()
 
-        middle_scroll.setWidget(middle_container)
-        self.splitter.addWidget(middle_scroll)
-
-        # 3. Panel de Consola y Comando FFmpeg (ocultable / inferior o lateral)
-        self.console_panel = ConsoleOutputPanel("Comando FFmpeg a ejecutar:", self)
-        self.cmd_preview = self.console_panel.cmd_preview
-        self.log_console = self.console_panel.log_console
-        self.splitter.addWidget(self.console_panel)
-        self.splitter_console = self.splitter
-
-        self.splitter.setCollapsible(0, False)
-        self.splitter.setCollapsible(1, False)
-        self.splitter.setCollapsible(2, False)
-
-        layout.addWidget(self.splitter, 1)
-
-        self.btn_show_console = QPushButton("🖥️ Mostrar Comando FFmpeg y Terminal de Salida", self)
-        self.btn_show_console.setObjectName("btn_show_console")
-        self.btn_show_console.setCursor(Qt.PointingHandCursor)
-        self.btn_show_console.setFixedHeight(28)
-        self.btn_show_console.setStyleSheet("""
-            QPushButton#btn_show_console {
-                background-color: #1a1b2b;
-                color: #38bdf8;
-                border: 1px dashed #3b4261;
-                border-radius: 6px;
-                padding: 4px 12px;
-                font-size: 11px;
-                font-weight: bold;
-            }
-            QPushButton#btn_show_console:hover {
-                background-color: #23253b;
-                color: #7dd3fc;
-                border: 1px solid #38bdf8;
-            }
-        """)
-        layout.addWidget(self.btn_show_console)
-
-        def _sync_with_main_window(pos=None, visible=None):
-            main_win = self.window()
-            if main_win and hasattr(main_win, "sync_console_panels"):
-                main_win.sync_console_panels(pos=pos, visible=visible)
-
-        def _on_hide():
-            config_manager.set_console_panel_visible(False)
-            self.apply_console_panel_settings(visible=False)
-            _sync_with_main_window(visible=False)
-
-        def _on_show():
-            config_manager.set_console_panel_visible(True)
-            self.apply_console_panel_settings(visible=True)
-            _sync_with_main_window(visible=True)
-
-        def _on_toggle_pos():
-            curr_pos = config_manager.get_console_panel_position()
-            new_pos = "side" if curr_pos == "bottom" else "bottom"
-            config_manager.set_console_panel_position(new_pos)
-            self.apply_console_panel_settings(pos=new_pos)
-            _sync_with_main_window(pos=new_pos)
-
-        self.console_panel.hide_requested.connect(_on_hide)
-        self.btn_show_console.clicked.connect(_on_show)
-        self.console_panel.toggle_position_requested.connect(_on_toggle_pos)
-
-        def apply_settings(pos: str = None, visible: bool = None):
-            if pos is None:
-                pos = config_manager.get_console_panel_position()
-            if visible is None:
-                visible = config_manager.get_console_panel_visible()
-
-            if pos == "side":
-                self.splitter.setOrientation(Qt.Horizontal)
-                self.splitter.setSizes([260, 380, 440])
-                self.splitter.setStretchFactor(0, 2)
-                self.splitter.setStretchFactor(1, 3)
-                self.splitter.setStretchFactor(2, 3)
-            else:
-                self.splitter.setOrientation(Qt.Vertical)
-                self.splitter.setSizes([200, 280, 200])
-                self.splitter.setStretchFactor(0, 3)
-                self.splitter.setStretchFactor(1, 4)
-                self.splitter.setStretchFactor(2, 3)
-
-            self.console_panel.set_position_mode(pos)
-            self.console_panel.setVisible(bool(visible))
-            self.btn_show_console.setVisible(not bool(visible))
-
-        self.apply_console_panel_settings = apply_settings
-        apply_settings()
-
+        # Configurar panel de consola y comando (ocultable / inferior o lateral)
+        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
         self.update_base_dir_display()
 
     def _update_count(self):
