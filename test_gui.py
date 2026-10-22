@@ -839,20 +839,38 @@ class TestFFmpegSuite(unittest.TestCase):
         player.worker.step(1.0)
         self.assertEqual(player.worker._seek_requested, 1.0)
 
-        # Probar repetición continua (bucle)
-        self.assertFalse(player.btn_loop.isChecked())
-        self.assertFalse(player.worker._loop)
-        player.btn_loop.setChecked(True)
-        player._toggle_loop()
+        # Probar repetición continua (bucle - activado por defecto)
+        self.assertTrue(player.btn_loop.isChecked())
         self.assertTrue(player.worker._loop)
-        player._toggle_loop_shortcut()
+        player.btn_loop.setChecked(False)
+        player._toggle_loop()
         self.assertFalse(player.worker._loop)
-        self.assertFalse(player.btn_loop.isChecked())
+        player._toggle_loop_shortcut()
+        self.assertTrue(player.worker._loop)
+        self.assertTrue(player.btn_loop.isChecked())
+
+        # Probar clic simple en el lienzo para alternar reproducir / pausa
+        self.assertFalse(player.worker._is_playing)
+        player.canvas.play_pause_requested.emit()
+        self.assertTrue(player.worker._is_playing)
+        player.canvas.play_pause_requested.emit()
+        self.assertFalse(player.worker._is_playing)
 
         # Probar que al llegar al final, reproducir reinicia desde el inicio (0.0s)
         player.worker._current_time = player.duration
         player._on_toggle_play()
         self.assertEqual(player.worker._seek_requested, 0.0)
+
+        # Verificar etiquetas de resolución y fps en cada lado
+        self.assertIn("Original (A)", player.canvas.label_a)
+        self.assertIn("Procesado (B)", player.canvas.label_b)
+        self.assertIn("fps", player.canvas.label_a)
+        self.assertIn("fps", player.canvas.label_b)
+
+        # Verificar flags de ventana (Minimizar, Maximizar/Restaurar y Cerrar)
+        from PyQt5.QtCore import Qt
+        flags = int(player.windowFlags())
+        self.assertTrue(flags & int(Qt.WindowMinMaxButtonsHint))
 
         # Cerrar el reproductor
         player.close()

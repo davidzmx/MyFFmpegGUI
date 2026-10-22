@@ -130,6 +130,7 @@ class CompareVideoCanvas(QWidget):
     - Modo 'side_by_side': Visualización lado a lado.
     """
     divider_moved = pyqtSignal(float)  # Ratio de división (0.0 a 1.0)
+    play_pause_requested = pyqtSignal()  # Clic simple para alternar Reproducir / Pausa
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -145,6 +146,13 @@ class CompareVideoCanvas(QWidget):
         self.show_labels: bool = True
         self.label_a: str = "Original (A)"
         self.label_b: str = "Procesado (B)"
+
+        # Temporizador para diferenciar clic simple (Play/Pausa) de doble clic (Pantalla Completa)
+        self._click_timer = QTimer(self)
+        self._click_timer.setSingleShot(True)
+        self._click_timer.timeout.connect(self._on_single_click)
+        self._press_pos = QPoint()
+        self._has_moved_divider = False
 
         # Rectángulo de dibujo del video dentro del widget (preservando aspecto)
         self.video_rect: QRect = QRect()
@@ -169,25 +177,26 @@ class CompareVideoCanvas(QWidget):
         return int(self.video_rect.x() + self.video_rect.width() * self.split_ratio)
 
     def mousePressEvent(self, event):
-        if self.mode == "split" and event.button() == Qt.LeftButton:
-            x = event.pos().x()
-            # Si el clic ocurre en el área de video, ajustamos la cortina directamente
-            if not self.video_rect.isEmpty():
-                ratio = (x - self.video_rect.x()) / max(1, self.video_rect.width())
-            else:
-                ratio = x / max(1, self.width())
-            self.split_ratio = max(0.02, min(0.98, ratio))
-            self.dragging_divider = True
-            self.setCursor(Qt.SplitHCursor)
-            self.divider_moved.emit(self.split_ratio)
-            self.update()
+        if event.button() == Qt.LeftButton:
+            self._press_pos = event.pos()
+            self._has_moved_divider = False
+            if self.mode == "split":
+                div_x = self._get_divider_x()
+                # Si el usuario hace clic cerca de la cortina (±20px), activamos el arrastre
+                if abs(event.pos().x() - div_x) <= 20:
+                    self.dragging_divider = True
+                    self.setCursor(Qt.SplitHCursor)
+                else:
+                    self.dragging_divider = False
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        x = event.pos().x()
         if self.mode == "split":
-            x = event.pos().x()
             div_x = self._get_divider_x()
             if self.dragging_divider:
+                if (event.pos() - self._press_pos).manhattanLength() > 3:
+                    self._has_moved_divider = True
                 if not self.video_rect.isEmpty():
                     ratio = (x - self.video_rect.x()) / max(1, self.video_rect.width())
                 else:
@@ -207,16 +216,24 @@ class CompareVideoCanvas(QWidget):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.LeftButton:
+            was_moving = self._has_moved_divider
             self.dragging_divider = False
             self.setCursor(Qt.ArrowCursor)
+            # Si no fue un arrastre de la cortina divisoria, es un clic simple para reproducir / pausar
+            if not was_moving:
+                self._click_timer.start(240)
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.LeftButton:
+            self._click_timer.stop()  # Cancelar el play/pause del primer clic
             top_level = self.window()
             if hasattr(top_level, "_toggle_fullscreen"):
                 top_level._toggle_fullscreen()
         super().mouseDoubleClickEvent(event)
+
+    def _on_single_click(self):
+        self.play_pause_requested.emit()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -295,10 +312,10 @@ class CompareVideoCanvas(QWidget):
             painter.drawText(QRect(div_x - 14, center_y - 12, 28, 24), Qt.AlignCenter, "◂ ▸")
             painter.restore()
 
-            # Etiquetas flotantes discretas ("Original" y "Procesado")
+            # Etiquetas flotantes discretas ("Original" y "Procesado" con sus resoluciones)
             if self.show_labels:
-                self._draw_pill_badge(painter, target_x + 12, target_y + 12, self.label_a, "#2563eb")
-                self._draw_pill_badge(painter, target_x + target_w - 110, target_y + 12, self.label_b, "#7c3aed")
+                self._draw_pill_badge(painter, target_x + 12, target_y + 12, self.label_a, "#2563eb", align_right=False)
+                self._draw_pill_badge(painter, target_x + target_w - 12, target_y + 12, self.label_b, "#7c3aed", align_right=True)
 
         elif self.mode == "side_by_side":
             # Dividir el widget en dos mitades horizontales
@@ -318,13 +335,13 @@ class CompareVideoCanvas(QWidget):
             rect_a = QRect((half_w - target_w) // 2, target_y, target_w, target_h)
             if self.image_a:
                 painter.drawImage(rect_a, self.image_a)
-            self._draw_pill_badge(painter, rect_a.x() + 8, rect_a.y() + 8, self.label_a, "#2563eb")
+            self._draw_pill_badge(painter, rect_a.x() + 8, rect_a.y() + 8, self.label_a, "#2563eb", align_right=False)
 
             # Mitad Derecha (Video B)
             rect_b = QRect(half_w + (half_w - target_w) // 2, target_y, target_w, target_h)
             if self.image_b:
                 painter.drawImage(rect_b, self.image_b)
-            self._draw_pill_badge(painter, rect_b.x() + 8, rect_b.y() + 8, self.label_b, "#7c3aed")
+            self._draw_pill_badge(painter, rect_b.x() + target_w - 8, rect_b.y() + 8, self.label_b, "#7c3aed", align_right=True)
 
             # Línea divisoria central
             painter.setPen(QPen(QColor("#334155"), 2))
@@ -332,7 +349,7 @@ class CompareVideoCanvas(QWidget):
 
             self.video_rect = QRect(0, 0, w_widget, h_widget)
 
-    def _draw_pill_badge(self, painter: QPainter, x: int, y: int, text: str, accent_color: str):
+    def _draw_pill_badge(self, painter: QPainter, x: int, y: int, text: str, accent_color: str, align_right: bool = False):
         """Dibuja una etiqueta redondeada semi-transparente para identificar los videos."""
         painter.save()
         font = QFont("Segoe UI", 9, QFont.Bold)
@@ -341,7 +358,8 @@ class CompareVideoCanvas(QWidget):
         text_w = metrics.horizontalAdvance(text) + 20
         text_h = 24
 
-        badge_rect = QRect(x, y, text_w, text_h)
+        badge_x = (x - text_w) if align_right else x
+        badge_rect = QRect(badge_x, y, text_w, text_h)
         painter.setBrush(QBrush(QColor(15, 23, 42, 210)))
         painter.setPen(QPen(QColor(accent_color), 1.5))
         painter.drawRoundedRect(badge_rect, 12, 12)
@@ -385,7 +403,7 @@ class ComparePlaybackWorker(QThread):
 
         self._is_running = True
         self._is_playing = False
-        self._loop = False
+        self._loop = True
         self._current_time = 0.0
         self._speed = 1.0
         self._seek_requested: Optional[float] = None
@@ -696,6 +714,12 @@ class VideoComparePlayerDialog(QDialog):
     def __init__(self, parent=None, video_a: str = "", video_b: str = "", ffmpeg_path: Optional[str] = None):
         super().__init__(parent)
         self.setWindowTitle("Reproductor Comparativo de Video - [Sincronizado]")
+        # Habilitar botones nativos de Minimizar, Maximizar/Restaurar y Cerrar
+        self.setWindowFlags(
+            Qt.Window
+            | Qt.WindowMinMaxButtonsHint
+            | Qt.WindowCloseButtonHint
+        )
         self.setMinimumSize(920, 600)
         self.resize(1120, 720)
 
@@ -709,7 +733,12 @@ class VideoComparePlayerDialog(QDialog):
         self.info_a = get_media_info(self.video_a)
         self.info_b = get_media_info(self.video_b)
         self.duration = max(self.info_a.get("duration", 0.0), self.info_b.get("duration", 0.0), 1.0)
-        self.fps = self.info_a.get("fps", 0.0) or self.info_b.get("fps", 0.0) or 30.0
+        
+        # Tasa de sincronización master: usar el mayor FPS de ambos videos para no degradar el video más fluido
+        fps_a_val = self.info_a.get("fps", 0.0) or 0.0
+        fps_b_val = self.info_b.get("fps", 0.0) or 0.0
+        candidate_fps = max(fps_a_val, fps_b_val)
+        self.fps = candidate_fps if candidate_fps > 0 else 30.0
 
         # Calcular resolución de renderizado respetando la relación de aspecto original del video
         self.render_w, self.render_h = self._compute_render_resolution()
@@ -737,7 +766,29 @@ class VideoComparePlayerDialog(QDialog):
         name_a = os.path.basename(self.video_a)
         name_b = os.path.basename(self.video_b)
 
-        lbl_a = QLabel(f"<b>A (Original):</b> {name_a}")
+        wa = self.info_a.get('width', 0)
+        ha = self.info_a.get('height', 0)
+        wb = self.info_b.get('width', 0)
+        hb = self.info_b.get('height', 0)
+        res_a_str = f"{wa}x{ha}" if wa > 0 and ha > 0 else ""
+        res_b_str = f"{wb}x{hb}" if wb > 0 and hb > 0 else ""
+
+        def _fmt_fps(val: float) -> str:
+            if not val or val <= 0:
+                return ""
+            return f"{val:.2f}".rstrip("0").rstrip(".") + " fps"
+
+        fps_a_val = self.info_a.get("fps", 0.0) or 0.0
+        fps_b_val = self.info_b.get("fps", 0.0) or 0.0
+        fps_a_str = _fmt_fps(fps_a_val)
+        fps_b_str = _fmt_fps(fps_b_val)
+        fps_sync_str = _fmt_fps(self.fps)
+
+        lbl_a_text = f"<b>A (Original):</b> {name_a}"
+        details_a = [x for x in [res_a_str, fps_a_str] if x]
+        if details_a:
+            lbl_a_text += f" <span style='color: #94a3b8; font-size: 11px;'>({' • '.join(details_a)})</span>"
+        lbl_a = QLabel(lbl_a_text)
         lbl_a.setStyleSheet("color: #60a5fa; font-size: 12px;")
         h_top.addWidget(lbl_a)
 
@@ -745,23 +796,18 @@ class VideoComparePlayerDialog(QDialog):
         lbl_sep.setStyleSheet("color: #94a3b8; font-weight: bold;")
         h_top.addWidget(lbl_sep)
 
-        lbl_b = QLabel(f"<b>B (Procesado):</b> {name_b}")
+        lbl_b_text = f"<b>B (Procesado):</b> {name_b}"
+        details_b = [x for x in [res_b_str, fps_b_str] if x]
+        if details_b:
+            lbl_b_text += f" <span style='color: #94a3b8; font-size: 11px;'>({' • '.join(details_b)})</span>"
+        lbl_b = QLabel(lbl_b_text)
         lbl_b.setStyleSheet("color: #c084fc; font-size: 12px;")
         h_top.addWidget(lbl_b)
 
         h_top.addStretch()
 
-        wa = self.info_a.get('width', 0)
-        ha = self.info_a.get('height', 0)
-        wb = self.info_b.get('width', 0)
-        hb = self.info_b.get('height', 0)
-        if wa > 0 and wb > 0 and (wa != wb or ha != hb):
-            res_str = f"A: {wa}x{ha} | B: {wb}x{hb} ({self.fps:.1f} fps)"
-        else:
-            base_w = wa or wb
-            base_h = ha or hb
-            res_str = f"{base_w}x{base_h} ({self.fps:.1f} fps)"
-        lbl_tech = QLabel(res_str)
+        lbl_tech = QLabel(f"Sync: {fps_sync_str}" if fps_sync_str else "")
+        lbl_tech.setToolTip("Tasa de refresco maestra del motor de sincronización paralela")
         lbl_tech.setStyleSheet("color: #94a3b8; font-size: 11px; background: #1e293b; padding: 2px 8px; border-radius: 4px;")
         h_top.addWidget(lbl_tech)
 
@@ -769,9 +815,12 @@ class VideoComparePlayerDialog(QDialog):
 
         # 2. Lienzo de Video
         self.canvas = CompareVideoCanvas(self)
-        self.canvas.label_a = "Original (A)"
-        self.canvas.label_b = "Procesado (B)"
+        pill_a_parts = [x for x in [res_a_str, fps_a_str] if x]
+        pill_b_parts = [x for x in [res_b_str, fps_b_str] if x]
+        self.canvas.label_a = f"Original (A) • {' • '.join(pill_a_parts)}" if pill_a_parts else "Original (A)"
+        self.canvas.label_b = f"Procesado (B) • {' • '.join(pill_b_parts)}" if pill_b_parts else "Procesado (B)"
         self.canvas.divider_moved.connect(self._on_divider_moved)
+        self.canvas.play_pause_requested.connect(self._on_toggle_play)
         layout.addWidget(self.canvas, stretch=1)
 
         # 3. Línea de tiempo interactiva (Seek Bar)
@@ -857,7 +906,7 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_loop = QPushButton("Bucle", self)
         self.btn_loop.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
         self.btn_loop.setCheckable(True)
-        self.btn_loop.setChecked(False)
+        self.btn_loop.setChecked(True)
         self.btn_loop.setFixedHeight(28)
         self.btn_loop.setStyleSheet("""
             QPushButton {
