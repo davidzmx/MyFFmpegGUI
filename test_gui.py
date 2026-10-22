@@ -992,10 +992,16 @@ class TestFFmpegSuite(unittest.TestCase):
 
         # Probar cambio de modo
         tab.combo_audio_mode.setCurrentIndex(1)  # mix
+        self.assertFalse(tab.widget_mix_volumes.isHidden())
+        tab.slider_vol_orig.setValue(80)
+        tab.slider_vol_added.setValue(35)
         preview_text = tab.cmd_preview.get_command()
         self.assertIn("amix", preview_text)
+        self.assertIn("volume=0.8", preview_text)
+        self.assertIn("volume=0.35", preview_text)
 
         tab.combo_audio_mode.setCurrentIndex(2)  # add_track
+        self.assertTrue(tab.widget_mix_volumes.isHidden())
         preview_text = tab.cmd_preview.get_command()
         self.assertIn("0:a?", preview_text)
 
@@ -1208,6 +1214,77 @@ class TestFFmpegSuite(unittest.TestCase):
         concat_tab.combo_mode.setCurrentIndex(0)  # "copy"
         self.assertFalse(concat_tab.chk_anti_stutter.isChecked())
         self.assertTrue(concat_tab.widget_anti_stutter_opts.isHidden())
+
+        win.close()
+
+    def test_23_audio_mix_volume_controls(self):
+        """Verifica el control individual de volumen al mezclar audio en Poner Audio a Video y Unir Segmentos."""
+        # 1. Probar build_add_audio_to_video_command con volúmenes personalizados
+        cmd_add_vol = ffmpeg_core.build_add_audio_to_video_command(
+            self.ffmpeg_path,
+            video_file=self.test_video,
+            audio_file=os.path.join(self.tmp_path, "audio.mp3"),
+            output_file=os.path.join(self.tmp_path, "out_vol.mp4"),
+            audio_mode="mix",
+            has_original_audio=True,
+            volume_orig=0.9,
+            volume_added=0.35
+        )
+        cmd_str = " ".join(cmd_add_vol)
+        self.assertIn("volume=0.9", cmd_str)
+        self.assertIn("volume=0.35", cmd_str)
+        self.assertIn("amix=inputs=2", cmd_str)
+
+        # 2. Probar build_concat_command con modo mix y volúmenes personalizados
+        dummy_list = os.path.join(self.tmp_path, "concat_list_vol.txt")
+        dummy_audio = os.path.join(self.tmp_path, "bg_music_vol.mp3")
+        dummy_out = os.path.join(self.tmp_path, "concat_out_vol.mp4")
+
+        cmd_concat_vol = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            list_file_path=dummy_list,
+            output_file=dummy_out,
+            mode="copy",
+            audio_file=dummy_audio,
+            audio_mode="mix",
+            volume_orig=0.75,
+            volume_added=0.25
+        )
+        cmd_concat_str = " ".join(cmd_concat_vol)
+        self.assertIn("volume=0.75", cmd_concat_str)
+        self.assertIn("volume=0.25", cmd_concat_str)
+        self.assertIn("amix=inputs=2", cmd_concat_str)
+
+        # 3. Probar interacción UI en TabConcat
+        f_seg1 = os.path.join(self.tmp_path, "seg_vol_1.mp4")
+        f_seg2 = os.path.join(self.tmp_path, "seg_vol_2.mp4")
+        with open(f_seg1, "w") as f:
+            f.write("dummy1")
+        with open(f_seg2, "w") as f:
+            f.write("dummy2")
+
+        win = MainWindow()
+        concat_tab = win.tab_concat
+        concat_tab._insert_paths([f_seg1, f_seg2])
+
+        # Sin archivo de audio, el subpanel de volumen debe estar oculto
+        self.assertTrue(concat_tab.widget_concat_mix_vol.isHidden())
+
+        # Seleccionar archivo de audio y cambiar a mix
+        concat_tab.audio_selector.set_path(dummy_audio)
+        concat_tab.combo_audio_mode.setCurrentIndex(1)  # "mix"
+        self.assertFalse(concat_tab.widget_concat_mix_vol.isHidden())
+
+        # Modificar deslizadores
+        concat_tab.slider_vol_orig.setValue(70)
+        concat_tab.slider_vol_added.setValue(40)
+        preview_text = concat_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("volume=0.7", preview_text)
+        self.assertIn("volume=0.4", preview_text)
+
+        # Limpiar audio -> se oculta el subpanel
+        concat_tab.btn_clear_audio.click()
+        self.assertTrue(concat_tab.widget_concat_mix_vol.isHidden())
 
         win.close()
 

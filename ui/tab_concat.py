@@ -10,7 +10,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox,
-    QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle, QRadioButton, QSpinBox
+    QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle, QRadioButton, QSpinBox, QSlider
 )
 from PyQt5.QtCore import Qt
 from ui.widgets import (
@@ -213,7 +213,7 @@ class TabConcat(QWidget):
         self.combo_audio_mode.addItem("Reemplazar audio de los videos (o añadir si son mudos)", "replace")
         self.combo_audio_mode.addItem("Mezclar con el audio original de los videos", "mix")
         self.combo_audio_mode.addItem("Añadir como pista secundaria de audio", "add_track")
-        self.combo_audio_mode.currentIndexChanged.connect(lambda _: self._update_command_preview())
+        self.combo_audio_mode.currentIndexChanged.connect(self._on_concat_audio_mode_changed)
         h_audio_opts.addWidget(self.combo_audio_mode, 1)
 
         self.chk_shortest = QCheckBox("Ajustar al final del video (cortar audio sobrante)")
@@ -224,6 +224,65 @@ class TabConcat(QWidget):
 
         self.widget_audio_opts.setVisible(False)
         layout_audio.addWidget(self.widget_audio_opts)
+
+        # Subpanel de ajuste de volúmenes para modo Mezcla en Concat
+        self.widget_concat_mix_vol = QWidget()
+        layout_mix_vol = QVBoxLayout(self.widget_concat_mix_vol)
+        layout_mix_vol.setContentsMargins(8, 2, 8, 2)
+        layout_mix_vol.setSpacing(6)
+
+        # Fila 1: Audio Original
+        h_vol_orig = QHBoxLayout()
+        lbl_icon_orig = QLabel("🔊 Volumen audio original:")
+        lbl_icon_orig.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_icon_orig.setMinimumWidth(180)
+        self.slider_vol_orig = QSlider(Qt.Horizontal)
+        self.slider_vol_orig.setRange(0, 200)
+        self.slider_vol_orig.setValue(100)
+        self.slider_vol_orig.setTickPosition(QSlider.TicksBelow)
+        self.slider_vol_orig.setTickInterval(50)
+        self.slider_vol_orig.valueChanged.connect(self._on_vol_orig_changed)
+        self.lbl_vol_orig_val = QLabel("100%")
+        self.lbl_vol_orig_val.setFixedWidth(50)
+        self.lbl_vol_orig_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
+        btn_reset_orig = QPushButton("100%")
+        btn_reset_orig.setToolTip("Restablecer volumen original a 100%")
+        btn_reset_orig.setFixedWidth(45)
+        btn_reset_orig.clicked.connect(lambda: self.slider_vol_orig.setValue(100))
+
+        h_vol_orig.addWidget(lbl_icon_orig)
+        h_vol_orig.addWidget(self.slider_vol_orig, 1)
+        h_vol_orig.addWidget(self.lbl_vol_orig_val)
+        h_vol_orig.addWidget(btn_reset_orig)
+        layout_mix_vol.addLayout(h_vol_orig)
+
+        # Fila 2: Audio Agregado
+        h_vol_added = QHBoxLayout()
+        lbl_icon_added = QLabel("🎵 Volumen audio agregado:")
+        lbl_icon_added.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_icon_added.setMinimumWidth(180)
+        self.slider_vol_added = QSlider(Qt.Horizontal)
+        self.slider_vol_added.setRange(0, 200)
+        self.slider_vol_added.setValue(100)
+        self.slider_vol_added.setTickPosition(QSlider.TicksBelow)
+        self.slider_vol_added.setTickInterval(50)
+        self.slider_vol_added.valueChanged.connect(self._on_vol_added_changed)
+        self.lbl_vol_added_val = QLabel("100%")
+        self.lbl_vol_added_val.setFixedWidth(50)
+        self.lbl_vol_added_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
+        btn_reset_added = QPushButton("100%")
+        btn_reset_added.setToolTip("Restablecer volumen agregado a 100%")
+        btn_reset_added.setFixedWidth(45)
+        btn_reset_added.clicked.connect(lambda: self.slider_vol_added.setValue(100))
+
+        h_vol_added.addWidget(lbl_icon_added)
+        h_vol_added.addWidget(self.slider_vol_added, 1)
+        h_vol_added.addWidget(self.lbl_vol_added_val)
+        h_vol_added.addWidget(btn_reset_added)
+        layout_mix_vol.addLayout(h_vol_added)
+
+        self.widget_concat_mix_vol.setVisible(False)
+        layout_audio.addWidget(self.widget_concat_mix_vol)
 
         lbl_audio_note = QLabel(
             "• El video se une a máxima velocidad sin pérdida (Stream Copy) y el audio se sincroniza en AAC de alta fidelidad."
@@ -468,10 +527,28 @@ class TabConcat(QWidget):
             self.chk_anti_stutter.blockSignals(False)
         self._update_command_preview()
 
+    def _on_vol_orig_changed(self, val: int):
+        self.lbl_vol_orig_val.setText(f"{val}%")
+        self._update_command_preview()
+
+    def _on_vol_added_changed(self, val: int):
+        self.lbl_vol_added_val.setText(f"{val}%")
+        self._update_command_preview()
+
+    def _on_concat_audio_mode_changed(self):
+        has_file = bool(self.audio_selector.get_path().strip())
+        is_mix = has_file and (self.combo_audio_mode.currentData() == "mix")
+        if hasattr(self, "widget_concat_mix_vol"):
+            self.widget_concat_mix_vol.setVisible(is_mix)
+        self._update_command_preview()
+
     def _on_audio_file_changed(self, path: str):
         has_file = bool(path and path.strip())
         self.btn_clear_audio.setEnabled(has_file)
         self.widget_audio_opts.setVisible(has_file)
+        is_mix = has_file and (self.combo_audio_mode.currentData() == "mix")
+        if hasattr(self, "widget_concat_mix_vol"):
+            self.widget_concat_mix_vol.setVisible(is_mix)
         self._update_command_preview()
 
     def _clear_audio(self):
@@ -498,6 +575,9 @@ class TabConcat(QWidget):
         drop_frames = self.spin_drop_frames.value() if hasattr(self, "spin_drop_frames") else 1
         files = [self.list_widget.item(i).text() for i in range(count)] if count >= 2 else []
 
+        vol_orig = (self.slider_vol_orig.value() / 100.0) if hasattr(self, "slider_vol_orig") else 1.0
+        vol_added = (self.slider_vol_added.value() / 100.0) if hasattr(self, "slider_vol_added") else 1.0
+
         try:
             cmd = ffmpeg_core.build_concat_command(
                 ffmpeg_path=ffmpeg_path or "ffmpeg",
@@ -510,7 +590,9 @@ class TabConcat(QWidget):
                 anti_stutter=anti_stutter,
                 stutter_mode=stutter_mode,
                 drop_start_frames=drop_frames,
-                file_paths=files
+                file_paths=files,
+                volume_orig=vol_orig,
+                volume_added=vol_added
             )
             self.cmd_preview.set_command(cmd)
         except Exception as e:
@@ -614,6 +696,9 @@ class TabConcat(QWidget):
         stutter_mode = "manual" if (anti_stutter and hasattr(self, "radio_stutter_manual") and self.radio_stutter_manual.isChecked()) else "auto"
         drop_frames = self.spin_drop_frames.value() if hasattr(self, "spin_drop_frames") else 1
 
+        vol_orig = (self.slider_vol_orig.value() / 100.0) if hasattr(self, "slider_vol_orig") else 1.0
+        vol_added = (self.slider_vol_added.value() / 100.0) if hasattr(self, "slider_vol_added") else 1.0
+
         cmd = ffmpeg_core.build_concat_command(
             ffmpeg_path=ffmpeg_path,
             list_file_path=self.temp_list_file,
@@ -625,7 +710,9 @@ class TabConcat(QWidget):
             anti_stutter=anti_stutter,
             stutter_mode=stutter_mode,
             drop_start_frames=drop_frames,
-            file_paths=files
+            file_paths=files,
+            volume_orig=vol_orig,
+            volume_added=vol_added
         )
 
         self.output_actions.hide_output()

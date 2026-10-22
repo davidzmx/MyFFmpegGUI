@@ -285,6 +285,14 @@ def build_audio_convert_command(
     return cmd
 
 
+def format_volume_filter(val: float) -> str:
+    """Formatea un multiplicador numérico de volumen para el filtro 'volume' de FFmpeg (ej. 1.0, 0.35, 1.5)."""
+    v = max(0.0, float(val))
+    if abs(v - round(v)) < 0.001:
+        return f"{v:.1f}"
+    return f"{v:.2f}".rstrip('0')
+
+
 def build_add_audio_to_video_command(
     ffmpeg_path: str,
     video_file: str,
@@ -293,15 +301,19 @@ def build_add_audio_to_video_command(
     audio_mode: str = "replace",  # "replace", "mix", "add_track"
     audio_codec: str = "aac",     # "aac", "copy", "mp3", "flac"
     shortest: bool = True,
-    has_original_audio: bool = True
+    has_original_audio: bool = True,
+    volume_orig: float = 1.0,
+    volume_added: float = 1.0
 ) -> List[str]:
     """
     Construye el comando FFmpeg para incorporar, reemplazar o mezclar audio en un video.
     El video se procesa con Stream Copy (-c:v copy) 100% sin pérdida de calidad ni tiempo.
     - 'replace': Reemplaza el audio existente o añade audio al video si era mudo.
-    - 'mix': Mezcla el audio original del video con la nueva pista de audio.
+    - 'mix': Mezcla el audio original del video con la nueva pista de audio, con control independiente de volumen.
     - 'add_track': Conserva el audio original y añade la nueva pista como pista secundaria.
     - shortest: Corta el audio si es más largo que el video para evitar fotogramas congelados.
+    - volume_orig: Multiplicador de volumen del audio original (1.0 = 100%).
+    - volume_added: Multiplicador de volumen del audio agregado (1.0 = 100%).
     """
     cmd = [
         ffmpeg_path, "-y",
@@ -324,9 +336,11 @@ def build_add_audio_to_video_command(
         a_codec_args = ["-c:a", "aac", "-b:a", "256k"]
 
     if audio_mode == "mix" and has_original_audio:
-        # Mezclar requiere recodificar audio con amix
+        # Mezclar requiere recodificar audio con amix y soporte para volumen individual
+        vo_str = format_volume_filter(volume_orig)
+        va_str = format_volume_filter(volume_added)
         cmd.extend([
-            "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-filter_complex", f"[0:a]volume={vo_str}[a0];[1:a]volume={va_str}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]",
             "-map", "0:v:0",
             "-map", "[aout]"
         ])
@@ -620,7 +634,9 @@ def build_concat_command(
     anti_stutter: bool = False,
     stutter_mode: str = "auto",  # "auto" o "manual"
     drop_start_frames: int = 1,
-    file_paths: Optional[List[str]] = None
+    file_paths: Optional[List[str]] = None,
+    volume_orig: float = 1.0,
+    volume_added: float = 1.0
 ) -> List[str]:
     """
     Construye el comando para unir segmentos con soporte opcional para:
@@ -632,13 +648,18 @@ def build_concat_command(
     - audio_file: Archivo de audio externo (MP3, WAV, AAC, etc.) a incorporar al archivo unificado.
     - audio_mode:
         * 'replace': Reemplaza el audio existente o añade audio al video unificado.
-        * 'mix': Mezcla el audio existente de los videos con el audio externo.
+        * 'mix': Mezcla el audio existente de los videos con el audio externo (con soporte para volumen individual).
         * 'add_track': Conserva el audio original y añade el nuevo audio como segunda pista.
     - shortest: Corta el audio si es más largo que el video unido para evitar fotograma congelado.
+    - volume_orig: Multiplicador de volumen del audio original de los videos (1.0 = 100%).
+    - volume_added: Multiplicador de volumen del audio agregado (1.0 = 100%).
     """
     actual_list = list_file_path or concat_list_file or ""
     has_audio = bool(audio_file and str(audio_file).strip())
     audio_target = str(audio_file).strip() if has_audio else None
+
+    vo_str = format_volume_filter(volume_orig)
+    va_str = format_volume_filter(volume_added)
 
     # Si se activa anti_stutter, se requiere recodificación obligatoriamente
     if anti_stutter:
@@ -702,7 +723,7 @@ def build_concat_command(
                     for i in range(1, k):
                         a_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
                     a_cat = "".join(f"[a{i}]" for i in range(k)) + f"concat=n={k}:v=0:a=1[acat]"
-                    mix_part = f"[acat][{ext_audio_idx}:a]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                    mix_part = f"[acat]volume={vo_str}[a0v];[{ext_audio_idx}:a]volume={va_str}[a1v];[a0v][a1v]amix=inputs=2:duration=first:dropout_transition=2[aout]"
                     fc = ";".join(v_parts + a_parts + [v_cat, a_cat, mix_part])
                     cmd.extend([
                         "-filter_complex", fc,
@@ -752,7 +773,7 @@ def build_concat_command(
         else:
             if audio_mode == "mix":
                 cmd.extend([
-                    "-filter_complex", "[0:v]mpdecimate,setpts=N/FRAME_RATE/TB[vout];[0:a]aresample=async=1000[a0];[a0][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    "-filter_complex", f"[0:v]mpdecimate,setpts=N/FRAME_RATE/TB[vout];[0:a]aresample=async=1000,volume={vo_str}[a0];[1:a]volume={va_str}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                     "-map", "[vout]",
                     "-map", "[aout]",
                     "-c:v", "libx264", "-crf", "17", "-preset", "fast",
@@ -812,7 +833,7 @@ def build_concat_command(
         if audio_mode == "mix":
             # Mezclar audio original de los segmentos con la nueva pista de audio
             cmd.extend([
-                "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                "-filter_complex", f"[0:a]volume={vo_str}[a0];[1:a]volume={va_str}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]",
                 "-map", "0:v:0",
                 "-map", "[aout]"
             ])
