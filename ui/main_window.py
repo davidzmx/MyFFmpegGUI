@@ -113,12 +113,12 @@ class MainWindow(QMainWindow):
         self.tab_compare = TabCompare(self.get_active_ffmpeg_paths, self)
 
         # Títulos limpios, concisos y compatibles con fuentes de Windows y Linux
-        self.tabs.addTab(self._wrap_tab(self.tab_audio), "Audio (MP3 / WAV)")
-        self.tabs.addTab(self._wrap_tab(self.tab_convert), "Convertir Video")
-        self.tabs.addTab(self._wrap_tab(self.tab_add_audio), "Poner Audio a Video")
-        self.tabs.addTab(self._wrap_tab(self.tab_extract), "Extraer Fotogramas")
-        self.tabs.addTab(self._wrap_tab(self.tab_create), "Crear Video")
-        self.tabs.addTab(self._wrap_tab(self.tab_segment), "Segmentar Video")
+        self.tabs.addTab(self.tab_audio, "Audio (MP3 / WAV)")
+        self.tabs.addTab(self.tab_convert, "Convertir Video")
+        self.tabs.addTab(self.tab_add_audio, "Poner Audio a Video")
+        self.tabs.addTab(self.tab_extract, "Extraer Fotogramas")
+        self.tabs.addTab(self.tab_create, "Crear Video")
+        self.tabs.addTab(self.tab_segment, "Segmentar Video")
         self.tabs.addTab(self.tab_concat, "Unir Segmentos")
         self.tabs.addTab(self.tab_compare, "Comparar Videos")
         self.tabs.addTab(self.tab_settings, "Ajustes")
@@ -204,10 +204,22 @@ class MainWindow(QMainWindow):
                 scroll_or_widget.update_base_dir_display()
 
     def _on_config_saved(self):
-        """Actualiza la visualización de la Carpeta Base en todas las pestañas."""
-        for tab in (self.tab_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat, self.tab_compare):
+        """Actualiza la visualización de la Carpeta Base y paneles de consola en todas las pestañas."""
+        for tab in (self.tab_audio, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat, self.tab_compare):
             if hasattr(tab, "update_base_dir_display"):
                 tab.update_base_dir_display()
+            if hasattr(tab, "apply_console_panel_settings"):
+                tab.apply_console_panel_settings()
+
+    def sync_console_panels(self, pos: str = None, visible: bool = None):
+        """Sincroniza la posición y visibilidad del panel de consola en todas las pestañas."""
+        if pos is not None:
+            config_manager.set_console_panel_position(pos)
+        if visible is not None:
+            config_manager.set_console_panel_visible(visible)
+        for tab in (self.tab_audio, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat):
+            if hasattr(tab, "apply_console_panel_settings"):
+                tab.apply_console_panel_settings(pos=pos, visible=visible)
 
     def get_active_ffmpeg_paths(self):
         """Devuelve las rutas activas de ffmpeg y ffprobe."""

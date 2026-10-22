@@ -8,7 +8,8 @@ import os
 from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
-    QFileDialog, QLabel, QPlainTextEdit, QProgressBar, QApplication, QStyle
+    QFileDialog, QLabel, QPlainTextEdit, QProgressBar, QApplication, QStyle,
+    QSplitter, QScrollArea
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 
@@ -548,3 +549,228 @@ class OutputActionsWidget(QWidget):
         if self.current_path:
             import config_manager
             config_manager.open_path_in_os(self.current_path, is_directory=True)
+
+
+class ConsoleOutputPanel(QWidget):
+    """
+    Panel unificado que integra el 'Comando FFmpeg a ejecutar' y la 'Terminal de Salida (FFmpeg)'.
+    Soporta:
+    - Ocultar / Mostrar el panel con un solo clic.
+    - Cambiar ubicación entre panel inferior (abajo) y panel lateral (derecha).
+    - Botones de copiar comando, copiar logs y limpiar terminal.
+    """
+    toggle_position_requested = pyqtSignal()
+    hide_requested = pyqtSignal()
+
+    def __init__(self, title: str = "Comando FFmpeg a ejecutar:", parent=None):
+        super().__init__(parent)
+        self.position = "bottom"
+        self.setObjectName("console_output_panel")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        # Barra superior del panel
+        header = QHBoxLayout()
+        header.setContentsMargins(2, 0, 2, 0)
+        header.setSpacing(6)
+
+        self.lbl_panel_title = QLabel("🖥️ Comando y Terminal FFmpeg")
+        self.lbl_panel_title.setStyleSheet("font-weight: bold; color: #a5b4fc; font-size: 11px;")
+        header.addWidget(self.lbl_panel_title)
+
+        header.addStretch()
+
+        self.btn_pos = QPushButton("➡ Panel Lateral")
+        self.btn_pos.setToolTip("Alternar entre ubicación Inferior (abajo) y Lateral (derecha)")
+        self.btn_pos.setFixedHeight(24)
+        self.btn_pos.setCursor(Qt.PointingHandCursor)
+        self.btn_pos.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #cbd5e1;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #334155;
+                color: #38bdf8;
+                border-color: #38bdf8;
+            }
+        """)
+        self.btn_pos.clicked.connect(self.toggle_position_requested.emit)
+        self.btn_toggle_pos = self.btn_pos
+        header.addWidget(self.btn_pos)
+
+        self.btn_hide = QPushButton("✖ Ocultar Panel")
+        self.btn_hide.setToolTip("Ocultar panel de comando y terminal para ganar espacio")
+        self.btn_hide.setFixedHeight(24)
+        self.btn_hide.setCursor(Qt.PointingHandCursor)
+        self.btn_hide.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #cbd5e1;
+                border: 1px solid #334155;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 500;
+            }
+            QPushButton:hover {
+                background-color: #451a1a;
+                color: #fca5a5;
+                border-color: #ef4444;
+            }
+        """)
+        self.btn_hide.clicked.connect(self.hide_requested.emit)
+        header.addWidget(self.btn_hide)
+
+        layout.addLayout(header)
+
+        # 1. Previsualización del comando
+        self.cmd_preview = CommandPreviewWidget(title, self)
+        layout.addWidget(self.cmd_preview)
+
+        # 2. Terminal de salida (FFmpeg)
+        self.log_console = LogConsole(self)
+        layout.addWidget(self.log_console, 1)
+
+    def set_position_mode(self, pos: str):
+        self.position = pos
+        if pos == "side":
+            self.btn_pos.setText("⬇ Panel Inferior")
+            self.btn_pos.setToolTip("Colocar el comando y la terminal en la parte inferior (abajo)")
+        else:
+            self.btn_pos.setText("➡ Panel Lateral")
+            self.btn_pos.setToolTip("Colocar el comando y la terminal en un panel lateral (derecha)")
+
+    def get_command(self) -> str:
+        return self.cmd_preview.get_command()
+
+    def set_command(self, cmd_or_list):
+        self.cmd_preview.set_command(cmd_or_list)
+
+    def append_log(self, text: str):
+        self.log_console.append_log(text)
+
+    def clear_logs(self):
+        self.log_console.clear_logs()
+
+    def copy_logs(self):
+        self.log_console.copy_logs()
+
+
+def setup_tab_console_layout(
+    tab_widget: QWidget,
+    form_widget: QWidget,
+    cmd_title: str = "Comando FFmpeg a ejecutar:",
+    initial_bottom_sizes: list = None,
+    initial_side_sizes: list = None
+):
+    """
+    Configura de manera uniforme el divisor QSplitter y el panel de comando y consola
+    en una pestaña dada.
+    """
+    # 1. ScrollArea para el formulario de opciones
+    scroll_form = QScrollArea(tab_widget)
+    scroll_form.setWidgetResizable(True)
+    scroll_form.setWidget(form_widget)
+    scroll_form.setFrameShape(QScrollArea.NoFrame)
+    tab_widget.scroll_form = scroll_form
+
+    # 2. Panel unificado de comando y consola
+    console_panel = ConsoleOutputPanel(cmd_title, tab_widget)
+    tab_widget.console_panel = console_panel
+    tab_widget.cmd_preview = console_panel.cmd_preview
+    tab_widget.log_console = console_panel.log_console
+
+    # 3. Divisor QSplitter
+    splitter = QSplitter(tab_widget)
+    splitter.setChildrenCollapsible(False)
+    splitter.addWidget(scroll_form)
+    splitter.addWidget(console_panel)
+    tab_widget.splitter = splitter
+    tab_widget.splitter_console = splitter
+
+    # 4. Botón flotante / inferior para mostrar el panel cuando está oculto
+    btn_show_console = QPushButton("🖥️ Mostrar Comando FFmpeg y Terminal de Salida", tab_widget)
+    btn_show_console.setObjectName("btn_show_console")
+    btn_show_console.setCursor(Qt.PointingHandCursor)
+    btn_show_console.setFixedHeight(28)
+    btn_show_console.setStyleSheet("""
+        QPushButton#btn_show_console {
+            background-color: #1a1b2b;
+            color: #38bdf8;
+            border: 1px dashed #3b4261;
+            border-radius: 6px;
+            padding: 4px 12px;
+            font-size: 11px;
+            font-weight: bold;
+        }
+        QPushButton#btn_show_console:hover {
+            background-color: #23253b;
+            color: #7dd3fc;
+            border: 1px solid #38bdf8;
+        }
+    """)
+    tab_widget.btn_show_console = btn_show_console
+
+    # Layout raíz de la pestaña
+    root_layout = QVBoxLayout(tab_widget)
+    root_layout.setContentsMargins(0, 0, 0, 0)
+    root_layout.setSpacing(4)
+    root_layout.addWidget(splitter, 1)
+    root_layout.addWidget(btn_show_console)
+
+    def _sync_with_main_window(pos=None, visible=None):
+        main_win = tab_widget.window()
+        if main_win and hasattr(main_win, "sync_console_panels"):
+            main_win.sync_console_panels(pos=pos, visible=visible)
+
+    def _on_hide():
+        config_manager.set_console_panel_visible(False)
+        tab_widget.apply_console_panel_settings(visible=False)
+        _sync_with_main_window(visible=False)
+
+    def _on_show():
+        config_manager.set_console_panel_visible(True)
+        tab_widget.apply_console_panel_settings(visible=True)
+        _sync_with_main_window(visible=True)
+
+    def _on_toggle_pos():
+        curr_pos = config_manager.get_console_panel_position()
+        new_pos = "side" if curr_pos == "bottom" else "bottom"
+        config_manager.set_console_panel_position(new_pos)
+        tab_widget.apply_console_panel_settings(pos=new_pos)
+        _sync_with_main_window(pos=new_pos)
+
+    console_panel.hide_requested.connect(_on_hide)
+    btn_show_console.clicked.connect(_on_show)
+    console_panel.toggle_position_requested.connect(_on_toggle_pos)
+
+    def apply_settings(pos: str = None, visible: bool = None):
+        if pos is None:
+            pos = config_manager.get_console_panel_position()
+        if visible is None:
+            visible = config_manager.get_console_panel_visible()
+
+        if pos == "side":
+            splitter.setOrientation(Qt.Horizontal)
+            splitter.setSizes(initial_side_sizes or [620, 500])
+            splitter.setStretchFactor(0, 3)
+            splitter.setStretchFactor(1, 2)
+        else:
+            splitter.setOrientation(Qt.Vertical)
+            splitter.setSizes(initial_bottom_sizes or [480, 240])
+            splitter.setStretchFactor(0, 3)
+            splitter.setStretchFactor(1, 2)
+
+        console_panel.set_position_mode(pos)
+        console_panel.setVisible(bool(visible))
+        btn_show_console.setVisible(not bool(visible))
+
+    tab_widget.apply_console_panel_settings = apply_settings
+    apply_settings()

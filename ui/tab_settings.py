@@ -237,8 +237,40 @@ class TabSettings(QWidget):
 
         layout.addWidget(group_base)
 
-        # 2. Estado del Sistema y Rutas de FFmpeg
-        group_paths = QGroupBox("2. Ejecutables de FFmpeg, FFprobe y FFplay")
+        # 2. Configuración del Panel de Salida (Comando y Terminal)
+        group_panel = QGroupBox("2. Panel de Salida (Comando FFmpeg y Terminal de Registros)")
+        layout_panel = QVBoxLayout(group_panel)
+
+        lbl_panel_desc = QLabel(
+            "Configure la ubicación y el comportamiento del panel que agrupa la vista previa del comando FFmpeg y los registros de terminal."
+        )
+        lbl_panel_desc.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        layout_panel.addWidget(lbl_panel_desc)
+
+        h_pos = QHBoxLayout()
+        h_pos.addWidget(QLabel("Ubicación del panel:"))
+        self.radio_panel_bottom = QRadioButton("Inferior (En la parte de abajo - Predeterminado)")
+        self.radio_panel_side = QRadioButton("Lateral (A la derecha)")
+        h_pos.addWidget(self.radio_panel_bottom)
+        h_pos.addWidget(self.radio_panel_side)
+        h_pos.addStretch()
+        layout_panel.addLayout(h_pos)
+
+        self.chk_panel_visible = QCheckBox("Mostrar panel de comando y terminal al iniciar")
+        self.chk_panel_visible.setChecked(True)
+        self.chk_panel_visible.setStyleSheet("font-weight: bold; color: #a5b4fc;")
+        layout_panel.addWidget(self.chk_panel_visible)
+
+        lbl_panel_tip = QLabel(
+            "• También puedes ocultar o alternar la ubicación del panel directamente en cualquier pestaña con los botones integrados."
+        )
+        lbl_panel_tip.setStyleSheet("color: #64748b; font-size: 11px;")
+        layout_panel.addWidget(lbl_panel_tip)
+
+        layout.addWidget(group_panel)
+
+        # 3. Estado del Sistema y Rutas de FFmpeg
+        group_paths = QGroupBox("3. Ejecutables de FFmpeg, FFprobe y FFplay")
         layout_paths = QVBoxLayout(group_paths)
 
         lbl_os = QLabel(f"Sistema Operativo Detectado: <b>{sys.platform.upper()}</b>")
@@ -291,8 +323,8 @@ class TabSettings(QWidget):
 
         layout.addWidget(group_paths)
 
-        # 3. Integración, Orden y Atajos en el Menú Contextual (Clic Derecho)
-        group_context = QGroupBox("3. Integración, Orden y Atajos en el Menú Contextual (Clic Derecho en Archivos)")
+        # 4. Integración, Orden y Atajos en el Menú Contextual (Clic Derecho)
+        group_context = QGroupBox("4. Integración, Orden y Atajos en el Menú Contextual (Clic Derecho en Archivos)")
         layout_context = QVBoxLayout(group_context)
 
         lbl_context_info = QLabel(
@@ -396,12 +428,11 @@ class TabSettings(QWidget):
         h_ctx_btns.addWidget(self.btn_uninstall_context)
         h_ctx_btns.addWidget(self.btn_export_reg)
         layout_context.addLayout(h_ctx_btns)
-        layout_context.addLayout(h_ctx_btns)
 
         layout.addWidget(group_context)
 
-        # 4. Información de Versión
-        group_ver = QGroupBox("4. Verificación de Versión y Códecs")
+        # 5. Información de Versión
+        group_ver = QGroupBox("5. Verificación de Versión y Códecs")
         layout_ver = QVBoxLayout(group_ver)
 
         self.txt_version = QTextEdit()
@@ -413,8 +444,8 @@ class TabSettings(QWidget):
         layout_ver.addWidget(self.txt_version)
         layout.addWidget(group_ver)
 
-        # 5. Guía de portabilidad multiplataforma
-        group_guide = QGroupBox("5. Guía de Portabilidad (Windows y Linux)")
+        # 6. Guía de portabilidad multiplataforma
+        group_guide = QGroupBox("6. Guía de Portabilidad (Windows y Linux)")
         layout_guide = QVBoxLayout(group_guide)
 
         guide_text = (
@@ -465,6 +496,13 @@ class TabSettings(QWidget):
             self.radio_pref_base.setChecked(True)
         else:
             self.radio_pref_same.setChecked(True)
+
+        panel_pos = cfg.get("console_panel_position", "bottom")
+        if panel_pos == "side":
+            self.radio_panel_side.setChecked(True)
+        else:
+            self.radio_panel_bottom.setChecked(True)
+        self.chk_panel_visible.setChecked(bool(cfg.get("console_panel_visible", True)))
 
         self._update_preview_label()
         self._test_version()
@@ -686,16 +724,21 @@ class TabSettings(QWidget):
         config_manager.ensure_dir_exists(base_dir)
 
         save_loc = "base_dir" if self.radio_pref_base.isChecked() else "same_folder"
+        panel_pos = "side" if self.radio_panel_side.isChecked() else "bottom"
+        panel_visible = self.chk_panel_visible.isChecked()
 
-        cfg = {
+        curr_cfg = config_manager.load_config()
+        curr_cfg.update({
             "ffmpeg_path": self.edit_ffmpeg.text().strip(),
             "ffprobe_path": self.edit_ffprobe.text().strip(),
             "ffplay_path": self.edit_ffplay.text().strip(),
             "base_output_dir": base_dir,
             "auto_suggest_subfolders": self.chk_auto_subfolders.isChecked(),
-            "default_save_location": save_loc
-        }
-        config_manager.save_config(cfg)
+            "default_save_location": save_loc,
+            "console_panel_position": panel_pos,
+            "console_panel_visible": panel_visible,
+        })
+        config_manager.save_config(curr_cfg)
         self._update_preview_label()
         self.config_saved.emit()
         QMessageBox.information(self, "Guardado", "Configuración, Preferencias y Carpeta Base guardadas exitosamente.")

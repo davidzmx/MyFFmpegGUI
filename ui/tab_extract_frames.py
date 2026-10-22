@@ -11,7 +11,10 @@ from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QLineEdit, QDoubleSpinBox, QStyle
 )
-from ui.widgets import FileSelector, FolderSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+from ui.widgets import (
+    FileSelector, FolderSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
+    setup_tab_console_layout
+)
 import ffmpeg_core
 import config_manager
 from ffmpeg_worker import FFmpegWorker
@@ -24,8 +27,10 @@ class TabExtractFrames(QWidget):
         self.worker = None
         self.media_duration = 0.0
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        form_widget = QWidget()
+        form_layout = QVBoxLayout(form_widget)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(10, 10, 10, 10)
 
         # 1. Video de Entrada
         group_input = QGroupBox("1. Video de Entrada")
@@ -42,7 +47,7 @@ class TabExtractFrames(QWidget):
 
         layout_input.addWidget(self.input_selector)
         layout_input.addWidget(self.lbl_info)
-        layout.addWidget(group_input)
+        form_layout.addWidget(group_input)
 
         # 2. Configuración de extracción
         group_opts = QGroupBox("2. Formato y Modo de Extracción (Sin Pérdida)")
@@ -98,7 +103,7 @@ class TabExtractFrames(QWidget):
         h_row2.addWidget(self.edit_duration)
         layout_opts.addLayout(h_row2)
 
-        layout.addWidget(group_opts)
+        form_layout.addWidget(group_opts)
 
         # 3. Carpeta de destino
         group_out = QGroupBox("3. Carpeta de Destino de los Fotogramas")
@@ -141,18 +146,14 @@ class TabExtractFrames(QWidget):
         h_pattern.addWidget(self.edit_pattern, 1)
         layout_out.addLayout(h_pattern)
 
-        layout.addWidget(group_out)
+        form_layout.addWidget(group_out)
 
-        # 4. Vista Previa del Comando FFmpeg
-        self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout.addWidget(self.cmd_preview)
-
-        # 5. Progreso y Acciones
+        # 4. Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout.addWidget(self.progress_widget)
+        form_layout.addWidget(self.progress_widget)
 
         self.output_actions = OutputActionsWidget(file_label="Abrir Carpeta", parent=self)
-        layout.addWidget(self.output_actions)
+        form_layout.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Extraer Fotogramas", self)
@@ -166,11 +167,11 @@ class TabExtractFrames(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout.addLayout(h_btn_layout)
+        form_layout.addLayout(h_btn_layout)
+        form_layout.addStretch()
 
-        # 6. Consola
-        self.log_console = LogConsole(self)
-        layout.addWidget(self.log_console, 1)
+        # Configurar panel de consola y comando (ocultable / inferior o lateral)
+        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
 
         # Conectar cambios de opciones a la vista previa del comando
         self.combo_fmt.currentIndexChanged.connect(lambda _: self._update_command_preview())

@@ -13,7 +13,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle
 )
 from ui.widgets import (
-    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
+    setup_tab_console_layout
 )
 import ffmpeg_core
 import config_manager
@@ -27,8 +28,10 @@ class TabAudio(QWidget):
         self.worker = None
         self.media_duration = 0.0
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        form_widget = QWidget()
+        form_layout = QVBoxLayout(form_widget)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(10, 10, 10, 10)
 
         # 1. Entrada de archivo
         group_input = QGroupBox("1. Video de Entrada")
@@ -45,7 +48,7 @@ class TabAudio(QWidget):
 
         layout_input.addWidget(self.input_selector)
         layout_input.addWidget(self.lbl_info)
-        layout.addWidget(group_input)
+        form_layout.addWidget(group_input)
 
         # 2. Configuración de conversión
         group_opts = QGroupBox("2. Formato y Calidad de Audio (MP3 / WAV / Lossless)")
@@ -94,7 +97,7 @@ class TabAudio(QWidget):
         self.chk_metadata.stateChanged.connect(lambda _: self._update_command_preview())
         layout_opts.addWidget(self.chk_metadata)
 
-        layout.addWidget(group_opts)
+        form_layout.addWidget(group_opts)
 
         # 3. Salida de archivo con opción de Misma Carpeta o Carpeta Base
         group_out = QGroupBox("3. Archivo y Carpeta de Salida")
@@ -150,19 +153,15 @@ class TabAudio(QWidget):
         )
         self.output_selector.file_selected.connect(self._on_output_path_changed)
         layout_out.addWidget(self.output_selector)
-        layout.addWidget(group_out)
+        form_layout.addWidget(group_out)
 
-        # 4. Vista Previa del Comando FFmpeg a ejecutar con botón de copiar
-        self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout.addWidget(self.cmd_preview)
-
-        # 5. Progreso y Acciones
+        # 4. Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout.addWidget(self.progress_widget)
+        form_layout.addWidget(self.progress_widget)
 
-        # 5.5 Acciones post-generación (Abrir Audio / Abrir Carpeta)
+        # 4.5 Acciones post-generación (Abrir Audio / Abrir Carpeta)
         self.output_actions = OutputActionsWidget(file_label="Abrir Audio Extraído", parent=self)
-        layout.addWidget(self.output_actions)
+        form_layout.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Convertir a Audio", self)
@@ -176,11 +175,11 @@ class TabAudio(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout.addLayout(h_btn_layout)
+        form_layout.addLayout(h_btn_layout)
+        form_layout.addStretch()
 
-        # 6. Consola de registros
-        self.log_console = LogConsole(self)
-        layout.addWidget(self.log_console, 1)
+        # Configurar panel de consola y comando (ocultable / inferior o lateral)
+        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
 
         # Inicializar estado visual de carpeta base
         self.update_base_dir_display()

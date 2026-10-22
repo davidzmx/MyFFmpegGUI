@@ -18,7 +18,8 @@ from PyQt5.QtWidgets import (
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle
 )
 from ui.widgets import (
-    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
+    setup_tab_console_layout
 )
 import ffmpeg_core
 import config_manager
@@ -33,8 +34,10 @@ class TabAddAudio(QWidget):
         self.video_duration = 0.0
         self.has_original_audio = False
 
-        layout = QVBoxLayout(self)
-        layout.setSpacing(12)
+        form_widget = QWidget()
+        form_layout = QVBoxLayout(form_widget)
+        form_layout.setSpacing(12)
+        form_layout.setContentsMargins(10, 10, 10, 10)
 
         # 1. Video de Entrada
         group_video = QGroupBox("1. Video de Entrada")
@@ -51,7 +54,7 @@ class TabAddAudio(QWidget):
 
         layout_video.addWidget(self.video_selector)
         layout_video.addWidget(self.lbl_video_info)
-        layout.addWidget(group_video)
+        form_layout.addWidget(group_video)
 
         # 2. Pista de Audio a Incorporar
         group_audio = QGroupBox("2. Pista de Audio a Incorporar (Música / Voz / Banda Sonora)")
@@ -76,7 +79,7 @@ class TabAddAudio(QWidget):
         self.lbl_audio_info = QLabel("Duración: --:--:-- | Códec: No cargado | Frecuencia: -- Hz")
         self.lbl_audio_info.setObjectName("lbl_meta")
         layout_audio.addWidget(self.lbl_audio_info)
-        layout.addWidget(group_audio)
+        form_layout.addWidget(group_audio)
 
         # 3. Configuración y Modo de Audio
         group_opts = QGroupBox("3. Configuración y Modo de Audio")
@@ -128,7 +131,7 @@ class TabAddAudio(QWidget):
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
 
-        layout.addWidget(group_opts)
+        form_layout.addWidget(group_opts)
 
         # 4. Archivo y Carpeta de Salida
         group_out = QGroupBox("4. Archivo y Carpeta de Salida")
@@ -184,18 +187,14 @@ class TabAddAudio(QWidget):
         )
         self.output_selector.file_selected.connect(lambda _: self._update_command_preview())
         layout_out.addWidget(self.output_selector)
-        layout.addWidget(group_out)
+        form_layout.addWidget(group_out)
 
-        # 5. Previsualización del Comando FFmpeg
-        self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout.addWidget(self.cmd_preview)
-
-        # 6. Progreso y Acciones
+        # 5. Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
-        layout.addWidget(self.progress_widget)
+        form_layout.addWidget(self.progress_widget)
 
         self.output_actions = OutputActionsWidget(file_label="Abrir Video Resultante", parent=self)
-        layout.addWidget(self.output_actions)
+        form_layout.addWidget(self.output_actions)
 
         h_btn_layout = QHBoxLayout()
         self.btn_run = QPushButton("Poner Audio al Video", self)
@@ -210,11 +209,11 @@ class TabAddAudio(QWidget):
 
         h_btn_layout.addWidget(self.btn_run, 2)
         h_btn_layout.addWidget(self.btn_cancel, 1)
-        layout.addLayout(h_btn_layout)
+        form_layout.addLayout(h_btn_layout)
+        form_layout.addStretch()
 
-        # 7. Consola de registros
-        self.log_console = LogConsole(self)
-        layout.addWidget(self.log_console, 1)
+        # Configurar panel de consola y comando (ocultable / inferior o lateral)
+        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
 
         # Inicializar estado visual de carpeta base
         self.update_base_dir_display()

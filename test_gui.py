@@ -991,6 +991,77 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_console_output_panel_collapsible_and_position(self):
+        """Verifica que el panel de comando y terminal sea ocultable, alternable entre abajo y lateral, y persistente."""
+        from PyQt5.QtCore import Qt
+        from unittest.mock import patch
+        from PyQt5.QtWidgets import QMessageBox
+
+        win = MainWindow()
+
+        # Tabs que contienen el panel
+        tabs_with_console = [
+            win.tab_convert,
+            win.tab_audio,
+            win.tab_add_audio,
+            win.tab_extract,
+            win.tab_create,
+            win.tab_segment,
+            win.tab_concat
+        ]
+
+        for tab in tabs_with_console:
+            self.assertTrue(hasattr(tab, "console_panel"))
+            self.assertTrue(hasattr(tab, "btn_show_console"))
+            self.assertTrue(hasattr(tab, "cmd_preview"))
+            self.assertTrue(hasattr(tab, "log_console"))
+            self.assertTrue(hasattr(tab, "splitter_console"))
+
+        # 1. Probar sincronización a panel lateral ("side")
+        win.sync_console_panels("side", True)
+        self.assertEqual(config_manager.get_console_panel_position(), "side")
+        self.assertTrue(config_manager.get_console_panel_visible())
+        for tab in tabs_with_console:
+            self.assertEqual(tab.splitter_console.orientation(), Qt.Horizontal)
+            self.assertFalse(tab.console_panel.isHidden())
+            self.assertTrue(tab.btn_show_console.isHidden())
+            self.assertEqual(tab.console_panel.position, "side")
+
+        # 2. Probar ocultar el panel desde la pestaña
+        tab0 = tabs_with_console[0]
+        tab0.console_panel.btn_hide.click()
+        # Verificar que se ocultó y se muestra el botón para restaurar
+        self.assertTrue(tab0.console_panel.isHidden())
+        self.assertFalse(tab0.btn_show_console.isHidden())
+        self.assertFalse(config_manager.get_console_panel_visible())
+
+        # 3. Probar restaurar con el botón
+        tab0.btn_show_console.click()
+        self.assertFalse(tab0.console_panel.isHidden())
+        self.assertTrue(tab0.btn_show_console.isHidden())
+        self.assertTrue(config_manager.get_console_panel_visible())
+
+        # 4. Probar alternar posición con el botón del panel (de lateral a abajo)
+        tab0.console_panel.btn_toggle_pos.click()
+        self.assertEqual(config_manager.get_console_panel_position(), "bottom")
+        for tab in tabs_with_console:
+            self.assertEqual(tab.splitter_console.orientation(), Qt.Vertical)
+            self.assertEqual(tab.console_panel.position, "bottom")
+
+        # 5. Probar configuración desde TabSettings
+        settings = win.tab_settings
+        settings.radio_panel_side.setChecked(True)
+        settings.chk_panel_visible.setChecked(False)
+        with patch.object(QMessageBox, "information", return_value=0):
+            settings._save_settings()
+
+        self.assertEqual(config_manager.get_console_panel_position(), "side")
+        self.assertFalse(config_manager.get_console_panel_visible())
+
+        # Restaurar a bottom y visible para dejar limpio
+        win.sync_console_panels("bottom", True)
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()

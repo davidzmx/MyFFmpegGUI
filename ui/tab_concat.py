@@ -14,7 +14,8 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from ui.widgets import (
-    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget
+    FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
+    ConsoleOutputPanel
 )
 import ffmpeg_core
 import config_manager
@@ -240,10 +241,6 @@ class TabConcat(QWidget):
         layout_out.addWidget(self.output_selector)
         layout_middle.addWidget(group_out)
 
-        # 2.3 Vista Previa del Comando FFmpeg
-        self.cmd_preview = CommandPreviewWidget("Comando FFmpeg a ejecutar:", self)
-        layout_middle.addWidget(self.cmd_preview)
-
         # 2.4 Progreso y Acciones
         self.progress_widget = ProgressBarWithStatus(self)
         layout_middle.addWidget(self.progress_widget)
@@ -268,22 +265,92 @@ class TabConcat(QWidget):
         middle_scroll.setWidget(middle_container)
         self.splitter.addWidget(middle_scroll)
 
-        # 3. Terminal de Salida (FFmpeg) - Redimensionable mediante divisor inferior
-        self.log_console = LogConsole(self)
-        self.log_console.setMinimumHeight(60)
-        self.splitter.addWidget(self.log_console)
+        # 3. Panel de Consola y Comando FFmpeg (ocultable / inferior o lateral)
+        self.console_panel = ConsoleOutputPanel("Comando FFmpeg a ejecutar:", self)
+        self.cmd_preview = self.console_panel.cmd_preview
+        self.log_console = self.console_panel.log_console
+        self.splitter.addWidget(self.console_panel)
+        self.splitter_console = self.splitter
 
-        # Proporciones equilibradas y expansión interactiva en ambas barras divisoras
         self.splitter.setCollapsible(0, False)
         self.splitter.setCollapsible(1, False)
         self.splitter.setCollapsible(2, False)
 
-        self.splitter.setSizes([220, 310, 140])
-        self.splitter.setStretchFactor(0, 3)
-        self.splitter.setStretchFactor(1, 4)
-        self.splitter.setStretchFactor(2, 2)
+        layout.addWidget(self.splitter, 1)
 
-        layout.addWidget(self.splitter)
+        self.btn_show_console = QPushButton("🖥️ Mostrar Comando FFmpeg y Terminal de Salida", self)
+        self.btn_show_console.setObjectName("btn_show_console")
+        self.btn_show_console.setCursor(Qt.PointingHandCursor)
+        self.btn_show_console.setFixedHeight(28)
+        self.btn_show_console.setStyleSheet("""
+            QPushButton#btn_show_console {
+                background-color: #1a1b2b;
+                color: #38bdf8;
+                border: 1px dashed #3b4261;
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton#btn_show_console:hover {
+                background-color: #23253b;
+                color: #7dd3fc;
+                border: 1px solid #38bdf8;
+            }
+        """)
+        layout.addWidget(self.btn_show_console)
+
+        def _sync_with_main_window(pos=None, visible=None):
+            main_win = self.window()
+            if main_win and hasattr(main_win, "sync_console_panels"):
+                main_win.sync_console_panels(pos=pos, visible=visible)
+
+        def _on_hide():
+            config_manager.set_console_panel_visible(False)
+            self.apply_console_panel_settings(visible=False)
+            _sync_with_main_window(visible=False)
+
+        def _on_show():
+            config_manager.set_console_panel_visible(True)
+            self.apply_console_panel_settings(visible=True)
+            _sync_with_main_window(visible=True)
+
+        def _on_toggle_pos():
+            curr_pos = config_manager.get_console_panel_position()
+            new_pos = "side" if curr_pos == "bottom" else "bottom"
+            config_manager.set_console_panel_position(new_pos)
+            self.apply_console_panel_settings(pos=new_pos)
+            _sync_with_main_window(pos=new_pos)
+
+        self.console_panel.hide_requested.connect(_on_hide)
+        self.btn_show_console.clicked.connect(_on_show)
+        self.console_panel.toggle_position_requested.connect(_on_toggle_pos)
+
+        def apply_settings(pos: str = None, visible: bool = None):
+            if pos is None:
+                pos = config_manager.get_console_panel_position()
+            if visible is None:
+                visible = config_manager.get_console_panel_visible()
+
+            if pos == "side":
+                self.splitter.setOrientation(Qt.Horizontal)
+                self.splitter.setSizes([260, 380, 440])
+                self.splitter.setStretchFactor(0, 2)
+                self.splitter.setStretchFactor(1, 3)
+                self.splitter.setStretchFactor(2, 3)
+            else:
+                self.splitter.setOrientation(Qt.Vertical)
+                self.splitter.setSizes([200, 280, 200])
+                self.splitter.setStretchFactor(0, 3)
+                self.splitter.setStretchFactor(1, 4)
+                self.splitter.setStretchFactor(2, 3)
+
+            self.console_panel.set_position_mode(pos)
+            self.console_panel.setVisible(bool(visible))
+            self.btn_show_console.setVisible(not bool(visible))
+
+        self.apply_console_panel_settings = apply_settings
+        apply_settings()
 
         self.update_base_dir_display()
 
