@@ -1079,6 +1079,138 @@ class TestFFmpegSuite(unittest.TestCase):
         win.sync_console_panels("bottom", True)
         win.close()
 
+    def test_22_concat_anti_stutter(self):
+        """Verifica la lógica de eliminación de micro-stutter (automático mpdecimate y manual gte(n,N)) y sus controles de UI."""
+        dummy_list = os.path.join(self.tmp_path, "dummy_list_stutter.txt")
+        dummy_out = os.path.join(self.tmp_path, "output_anti_stutter.mp4")
+        seg1 = os.path.join(self.tmp_path, "seg1.mp4")
+        seg2 = os.path.join(self.tmp_path, "seg2.mp4")
+        seg3 = os.path.join(self.tmp_path, "seg3.mp4")
+        files = [seg1, seg2, seg3]
+
+        # 1. Modo automático inteligente (mpdecimate)
+        cmd_auto = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            list_file_path=dummy_list,
+            output_file=dummy_out,
+            mode="copy",
+            anti_stutter=True,
+            stutter_mode="auto"
+        )
+        self.assertIn("-vf", cmd_auto)
+        self.assertTrue(any("mpdecimate" in arg for arg in cmd_auto))
+        self.assertIn("-af", cmd_auto)
+        self.assertTrue(any("aresample" in arg for arg in cmd_auto))
+        self.assertIn("libx264", cmd_auto)
+
+        # 2. Modo manual (omitir N fotogramas con filter_complex)
+        cmd_manual = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            list_file_path=dummy_list,
+            output_file=dummy_out,
+            mode="copy",
+            anti_stutter=True,
+            stutter_mode="manual",
+            drop_start_frames=2,
+            file_paths=files
+        )
+        self.assertIn("-filter_complex", cmd_manual)
+        self.assertIn("-fps_mode", cmd_manual)
+        self.assertIn("passthrough", cmd_manual)
+        fc_str = [cmd_manual[i+1] for i, arg in enumerate(cmd_manual) if arg == "-filter_complex"][0]
+        self.assertIn("select=gte(n\\,2)", fc_str)
+        self.assertIn("concat=n=3:v=1:a=0", fc_str)
+        self.assertIn("concat=n=3:v=0:a=1", fc_str)
+
+        # 3. Modo manual con audio externo (replace)
+        dummy_audio = os.path.join(self.tmp_path, "audio_stutter.mp3")
+        cmd_manual_aud = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            list_file_path=dummy_list,
+            output_file=dummy_out,
+            mode="copy",
+            anti_stutter=True,
+            stutter_mode="manual",
+            drop_start_frames=1,
+            file_paths=files,
+            audio_file=dummy_audio,
+            audio_mode="replace"
+        )
+        self.assertIn(dummy_audio, cmd_manual_aud)
+        self.assertIn("-map", cmd_manual_aud)
+        self.assertIn("3:a:0", cmd_manual_aud)
+
+        # 4. Probar ejecución real de concat con anti-stutter
+        # Segmentar test_video en 2 partes
+        seg_pat = os.path.join(self.tmp_path, "seg_stutter_%03d.mp4")
+        subprocess.run(ffmpeg_core.build_segment_command(
+            self.ffmpeg_path, self.test_video, seg_pat, segment_duration_sec=2, mode="exact"
+        ), check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+
+        real_segments = sorted([
+            os.path.join(self.tmp_path, f)
+            for f in os.listdir(self.tmp_path)
+            if f.startswith("seg_stutter_") and f.endswith(".mp4")
+        ])
+        real_list = os.path.join(self.tmp_path, "real_stutter_list.txt")
+        ffmpeg_core.create_concat_list_file(real_segments, real_list)
+
+        # Ejecutar real en modo auto (mpdecimate)
+        out_real_auto = os.path.join(self.tmp_path, "out_real_auto.mp4")
+        cmd_exec_auto = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            list_file_path=real_list,
+            output_file=out_real_auto,
+            anti_stutter=True,
+            stutter_mode="auto"
+        )
+        res_auto = subprocess.run(cmd_exec_auto, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_auto.returncode, 0, f"Error en concat auto anti-stutter: {res_auto.stderr.decode('utf-8')}")
+        self.assertTrue(os.path.isfile(out_real_auto))
+
+        # Ejecutar real en modo manual (descartando 1 frame de seg 1)
+        out_real_manual = os.path.join(self.tmp_path, "out_real_manual.mp4")
+        cmd_exec_manual = ffmpeg_core.build_concat_command(
+            self.ffmpeg_path,
+            output_file=out_real_manual,
+            anti_stutter=True,
+            stutter_mode="manual",
+            drop_start_frames=1,
+            file_paths=real_segments
+        )
+        res_manual = subprocess.run(cmd_exec_manual, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_manual.returncode, 0, f"Error en concat manual anti-stutter: {res_manual.stderr.decode('utf-8')}")
+        self.assertTrue(os.path.isfile(out_real_manual))
+
+        # 5. Probar interacción de UI en TabConcat
+        win = MainWindow()
+        concat_tab = win.tab_concat
+        concat_tab._insert_paths(real_segments)
+
+        self.assertFalse(concat_tab.chk_anti_stutter.isChecked())
+        self.assertTrue(concat_tab.widget_anti_stutter_opts.isHidden())
+
+        # Activar anti-stutter
+        concat_tab.chk_anti_stutter.setChecked(True)
+        self.assertFalse(concat_tab.widget_anti_stutter_opts.isHidden())
+        self.assertEqual(concat_tab.combo_mode.currentData(), "reencode")
+        self.assertIn("mpdecimate", concat_tab.cmd_preview.text_cmd.toPlainText())
+
+        # Cambiar a modo manual
+        concat_tab.radio_stutter_manual.setChecked(True)
+        self.assertTrue(concat_tab.spin_drop_frames.isEnabled())
+        concat_tab.spin_drop_frames.setValue(2)
+        preview_text = concat_tab.cmd_preview.text_cmd.toPlainText()
+        self.assertIn("filter_complex", preview_text)
+        self.assertIn("select=gte(n\\,2)", preview_text)
+
+        # Si el usuario cambia de nuevo a Stream Copy, anti-stutter se desactiva automáticamente
+        concat_tab.combo_mode.setCurrentIndex(0)  # "copy"
+        self.assertFalse(concat_tab.chk_anti_stutter.isChecked())
+        self.assertTrue(concat_tab.widget_anti_stutter_opts.isHidden())
+
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()

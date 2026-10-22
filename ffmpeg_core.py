@@ -616,12 +616,19 @@ def build_concat_command(
     concat_list_file: str = None,
     audio_file: Optional[str] = None,
     audio_mode: str = "replace",  # "replace", "mix", "add_track"
-    shortest: bool = True
+    shortest: bool = True,
+    anti_stutter: bool = False,
+    stutter_mode: str = "auto",  # "auto" o "manual"
+    drop_start_frames: int = 1,
+    file_paths: Optional[List[str]] = None
 ) -> List[str]:
     """
-    Construye el comando para unir segmentos con soporte opcional para incorporar o mezclar pista de audio.
+    Construye el comando para unir segmentos con soporte opcional para:
     - 'copy': Modo demuxer concat sin pérdida y sin recodificación.
     - 'reencode': Recodificación con libx264 CRF 17.
+    - anti_stutter: Elimina micro-stutter / solapamiento entre segmentos (requiere recodificación):
+        * 'auto': Utiliza mpdecimate para detectar y descartar fotogramas idénticos/congelados en las uniones.
+        * 'manual': Descarta exactamente N fotogramas iniciales de cada segmento posterior mediante filter_complex.
     - audio_file: Archivo de audio externo (MP3, WAV, AAC, etc.) a incorporar al archivo unificado.
     - audio_mode:
         * 'replace': Reemplaza el audio existente o añade audio al video unificado.
@@ -630,6 +637,152 @@ def build_concat_command(
     - shortest: Corta el audio si es más largo que el video unido para evitar fotograma congelado.
     """
     actual_list = list_file_path or concat_list_file or ""
+    has_audio = bool(audio_file and str(audio_file).strip())
+    audio_target = str(audio_file).strip() if has_audio else None
+
+    # Si se activa anti_stutter, se requiere recodificación obligatoriamente
+    if anti_stutter:
+        mode = "reencode"
+
+        # Intentar extraer file_paths desde actual_list si no se suministró en modo manual
+        if stutter_mode == "manual":
+            if (not file_paths or len(file_paths) < 2) and actual_list and os.path.isfile(actual_list):
+                try:
+                    extracted = []
+                    with open(actual_list, "r", encoding="utf-8") as f:
+                        for line in f:
+                            line = line.strip()
+                            if line.startswith("file "):
+                                p = line[5:].strip().strip("'\"")
+                                extracted.append(p)
+                    if len(extracted) >= 2:
+                        file_paths = extracted
+                except Exception:
+                    pass
+
+        # Modo MANUAL: omitir N fotogramas al inicio de cada segmento posterior (>= 1)
+        if stutter_mode == "manual" and file_paths and len(file_paths) >= 2:
+            k = len(file_paths)
+            n_drop = max(1, int(drop_start_frames))
+
+            cmd = [ffmpeg_path, "-y"]
+            for f in file_paths:
+                cmd.extend(["-i", str(f)])
+            if has_audio:
+                cmd.extend(["-i", audio_target])
+                ext_audio_idx = k
+
+            # Filtros de video
+            v_parts = ["[0:v]setpts=PTS-STARTPTS[v0]"]
+            for i in range(1, k):
+                v_parts.append(f"[{i}:v]select=gte(n\,{n_drop}),setpts=PTS-STARTPTS[v{i}]")
+            v_cat = "".join(f"[v{i}]" for i in range(k)) + f"concat=n={k}:v=1:a=0[vout]"
+
+            if not has_audio:
+                a_parts = ["[0:a]asetpts=PTS-STARTPTS[a0]"]
+                for i in range(1, k):
+                    a_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
+                a_cat = "".join(f"[a{i}]" for i in range(k)) + f"concat=n={k}:v=0:a=1[aout]"
+                fc = ";".join(v_parts + a_parts + [v_cat, a_cat])
+                cmd.extend([
+                    "-filter_complex", fc,
+                    "-map", "[vout]",
+                    "-map", "[aout]"
+                ])
+            else:
+                if audio_mode == "replace":
+                    fc = ";".join(v_parts + [v_cat])
+                    cmd.extend([
+                        "-filter_complex", fc,
+                        "-map", "[vout]",
+                        "-map", f"{ext_audio_idx}:a:0"
+                    ])
+                elif audio_mode == "mix":
+                    a_parts = ["[0:a]asetpts=PTS-STARTPTS[a0]"]
+                    for i in range(1, k):
+                        a_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
+                    a_cat = "".join(f"[a{i}]" for i in range(k)) + f"concat=n={k}:v=0:a=1[acat]"
+                    mix_part = f"[acat][{ext_audio_idx}:a]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+                    fc = ";".join(v_parts + a_parts + [v_cat, a_cat, mix_part])
+                    cmd.extend([
+                        "-filter_complex", fc,
+                        "-map", "[vout]",
+                        "-map", "[aout]"
+                    ])
+                else:  # add_track
+                    a_parts = ["[0:a]asetpts=PTS-STARTPTS[a0]"]
+                    for i in range(1, k):
+                        a_parts.append(f"[{i}:a]asetpts=PTS-STARTPTS[a{i}]")
+                    a_cat = "".join(f"[a{i}]" for i in range(k)) + f"concat=n={k}:v=0:a=1[orig_a]"
+                    fc = ";".join(v_parts + a_parts + [v_cat, a_cat])
+                    cmd.extend([
+                        "-filter_complex", fc,
+                        "-map", "[vout]",
+                        "-map", "[orig_a]",
+                        "-map", f"{ext_audio_idx}:a:0"
+                    ])
+
+            cmd.extend([
+                "-fps_mode", "passthrough",
+                "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "256k"
+            ])
+            if has_audio and shortest:
+                cmd.append("-shortest")
+            cmd.append(output_file)
+            return cmd
+
+        # Modo AUTOMÁTICO (mpdecimate con concat demuxer)
+        cmd = [
+            ffmpeg_path, "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", actual_list
+        ]
+        if has_audio:
+            cmd.extend(["-i", audio_target])
+
+        if not has_audio:
+            cmd.extend([
+                "-vf", "mpdecimate,setpts=N/FRAME_RATE/TB",
+                "-af", "aresample=async=1000",
+                "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                "-c:a", "aac", "-b:a", "256k"
+            ])
+        else:
+            if audio_mode == "mix":
+                cmd.extend([
+                    "-filter_complex", "[0:v]mpdecimate,setpts=N/FRAME_RATE/TB[vout];[0:a]aresample=async=1000[a0];[a0][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+                    "-map", "[vout]",
+                    "-map", "[aout]",
+                    "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                    "-c:a", "aac", "-b:a", "256k"
+                ])
+            elif audio_mode == "add_track":
+                cmd.extend([
+                    "-filter_complex", "[0:v]mpdecimate,setpts=N/FRAME_RATE/TB[vout];[0:a]aresample=async=1000[a0]",
+                    "-map", "[vout]",
+                    "-map", "[a0]",
+                    "-map", "1:a:0",
+                    "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                    "-c:a", "aac", "-b:a", "256k"
+                ])
+            else:  # replace
+                cmd.extend([
+                    "-vf", "mpdecimate,setpts=N/FRAME_RATE/TB",
+                    "-map", "0:v:0",
+                    "-map", "1:a:0",
+                    "-c:v", "libx264", "-crf", "17", "-preset", "fast",
+                    "-c:a", "aac", "-b:a", "256k"
+                ])
+
+            if shortest:
+                cmd.append("-shortest")
+
+        cmd.append(output_file)
+        return cmd
+
+    # Comportamiento estándar sin anti_stutter
     cmd = [
         ffmpeg_path, "-y",
         "-f", "concat",
@@ -637,9 +790,8 @@ def build_concat_command(
         "-i", actual_list
     ]
 
-    has_audio = bool(audio_file and str(audio_file).strip())
     if has_audio:
-        cmd.extend(["-i", str(audio_file).strip()])
+        cmd.extend(["-i", audio_target])
 
     if not has_audio:
         if mode == "copy":

@@ -10,7 +10,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QListWidget, QFileDialog, QCheckBox,
-    QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle
+    QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle, QRadioButton, QSpinBox
 )
 from PyQt5.QtCore import Qt
 from ui.widgets import (
@@ -126,13 +126,59 @@ class TabConcat(QWidget):
         self.combo_mode.addItem(
             "Recodificación Inteligente (Para videos con diferente resolución o códec)", "reencode"
         )
-        self.combo_mode.currentIndexChanged.connect(lambda _: self._update_command_preview())
+        self.combo_mode.currentIndexChanged.connect(self._on_mode_combo_changed)
         h_mode.addWidget(self.combo_mode, 1)
         layout_opts.addLayout(h_mode)
 
+        # Control de eliminación de micro-stutter / solapamiento
+        self.chk_anti_stutter = QCheckBox("Eliminar micro-stutter / solapamiento entre segmentos")
+        self.chk_anti_stutter.setToolTip(
+            "Elimina fotogramas duplicados o congelados en las uniones entre segmentos (requiere recodificación inteligente)."
+        )
+        self.chk_anti_stutter.toggled.connect(self._on_anti_stutter_toggled)
+        layout_opts.addWidget(self.chk_anti_stutter)
+
+        self.widget_anti_stutter_opts = QWidget()
+        layout_stutter_box = QVBoxLayout(self.widget_anti_stutter_opts)
+        layout_stutter_box.setContentsMargins(16, 2, 0, 4)
+        layout_stutter_box.setSpacing(6)
+
+        self.radio_stutter_auto = QRadioButton("🤖 Automático inteligente (mpdecimate - detecta y descarta cuadros duplicados)")
+        self.radio_stutter_auto.setChecked(True)
+        self.radio_stutter_auto.setToolTip("Analiza el flujo de video y descarta automáticamente cuadros idénticos generados en la unión.")
+        self.radio_stutter_auto.toggled.connect(self._on_stutter_mode_changed)
+        layout_stutter_box.addWidget(self.radio_stutter_auto)
+
+        h_stutter_manual = QHBoxLayout()
+        h_stutter_manual.setSpacing(8)
+        self.radio_stutter_manual = QRadioButton("✂ Manual: Omitir primeros fotogramas de cada segmento siguiente:")
+        self.radio_stutter_manual.setToolTip("Descarta un número fijo de fotogramas al inicio de cada segmento posterior para eliminar fotogramas clave duplicados.")
+        self.radio_stutter_manual.toggled.connect(self._on_stutter_mode_changed)
+        h_stutter_manual.addWidget(self.radio_stutter_manual)
+
+        self.spin_drop_frames = QSpinBox()
+        self.spin_drop_frames.setRange(1, 10)
+        self.spin_drop_frames.setValue(1)
+        self.spin_drop_frames.setSuffix(" fotograma(s)")
+        self.spin_drop_frames.setEnabled(False)
+        self.spin_drop_frames.valueChanged.connect(lambda _: self._update_command_preview())
+        h_stutter_manual.addWidget(self.spin_drop_frames)
+        h_stutter_manual.addStretch()
+        layout_stutter_box.addLayout(h_stutter_manual)
+
+        self.lbl_stutter_hint = QLabel(
+            "• Automático: Recomendado si no sabes cuántos fotogramas se duplican.\n"
+            "• Manual: Recomendado si tus cortes siempre dejan 1 o 2 fotogramas idénticos al inicio del segmento posterior."
+        )
+        self.lbl_stutter_hint.setStyleSheet("color: #64748b; font-size: 11px;")
+        layout_stutter_box.addWidget(self.lbl_stutter_hint)
+
+        self.widget_anti_stutter_opts.setVisible(False)
+        layout_opts.addWidget(self.widget_anti_stutter_opts)
+
         lbl_note = QLabel(
             "• Stream Copy une los archivos a la velocidad de lectura del disco sin alterar un solo píxel.\n"
-            "• Requiere que todos los segmentos provengan de la misma fuente o tengan códecs compatibles."
+            "• La eliminación de micro-stutter analiza o descarta fotogramas duplicados mediante recodificación inteligente."
         )
         lbl_note.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout_opts.addWidget(lbl_note)
@@ -400,6 +446,28 @@ class TabConcat(QWidget):
         self.output_selector.set_path(suggested)
         self._update_command_preview()
 
+    def _on_anti_stutter_toggled(self, checked: bool):
+        self.widget_anti_stutter_opts.setVisible(checked)
+        if checked:
+            # La eliminación de micro-stutter requiere recodificación
+            if self.combo_mode.currentData() == "copy":
+                self.combo_mode.setCurrentIndex(1)  # "reencode"
+        self._update_command_preview()
+
+    def _on_stutter_mode_changed(self):
+        is_manual = self.radio_stutter_manual.isChecked()
+        self.spin_drop_frames.setEnabled(is_manual)
+        self._update_command_preview()
+
+    def _on_mode_combo_changed(self, index: int):
+        # Si el usuario selecciona Stream Copy con anti-stutter activo, desactivar anti-stutter
+        if self.combo_mode.currentData() == "copy" and hasattr(self, "chk_anti_stutter") and self.chk_anti_stutter.isChecked():
+            self.chk_anti_stutter.blockSignals(True)
+            self.chk_anti_stutter.setChecked(False)
+            self.widget_anti_stutter_opts.setVisible(False)
+            self.chk_anti_stutter.blockSignals(False)
+        self._update_command_preview()
+
     def _on_audio_file_changed(self, path: str):
         has_file = bool(path and path.strip())
         self.btn_clear_audio.setEnabled(has_file)
@@ -425,6 +493,11 @@ class TabConcat(QWidget):
         audio_mode = self.combo_audio_mode.currentData() if hasattr(self, "combo_audio_mode") else "replace"
         shortest = self.chk_shortest.isChecked() if hasattr(self, "chk_shortest") else True
 
+        anti_stutter = self.chk_anti_stutter.isChecked() if hasattr(self, "chk_anti_stutter") else False
+        stutter_mode = "manual" if (anti_stutter and hasattr(self, "radio_stutter_manual") and self.radio_stutter_manual.isChecked()) else "auto"
+        drop_frames = self.spin_drop_frames.value() if hasattr(self, "spin_drop_frames") else 1
+        files = [self.list_widget.item(i).text() for i in range(count)] if count >= 2 else []
+
         try:
             cmd = ffmpeg_core.build_concat_command(
                 ffmpeg_path=ffmpeg_path or "ffmpeg",
@@ -433,7 +506,11 @@ class TabConcat(QWidget):
                 mode=mode,
                 audio_file=audio_path if audio_path else None,
                 audio_mode=audio_mode,
-                shortest=shortest
+                shortest=shortest,
+                anti_stutter=anti_stutter,
+                stutter_mode=stutter_mode,
+                drop_start_frames=drop_frames,
+                file_paths=files
             )
             self.cmd_preview.set_command(cmd)
         except Exception as e:
@@ -533,6 +610,10 @@ class TabConcat(QWidget):
         audio_mode = self.combo_audio_mode.currentData() if hasattr(self, "combo_audio_mode") else "replace"
         shortest = self.chk_shortest.isChecked() if hasattr(self, "chk_shortest") else True
 
+        anti_stutter = self.chk_anti_stutter.isChecked() if hasattr(self, "chk_anti_stutter") else False
+        stutter_mode = "manual" if (anti_stutter and hasattr(self, "radio_stutter_manual") and self.radio_stutter_manual.isChecked()) else "auto"
+        drop_frames = self.spin_drop_frames.value() if hasattr(self, "spin_drop_frames") else 1
+
         cmd = ffmpeg_core.build_concat_command(
             ffmpeg_path=ffmpeg_path,
             list_file_path=self.temp_list_file,
@@ -540,7 +621,11 @@ class TabConcat(QWidget):
             mode=mode,
             audio_file=audio_file if audio_file else None,
             audio_mode=audio_mode,
-            shortest=shortest
+            shortest=shortest,
+            anti_stutter=anti_stutter,
+            stutter_mode=stutter_mode,
+            drop_start_frames=drop_frames,
+            file_paths=files
         )
 
         self.output_actions.hide_output()
