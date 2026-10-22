@@ -6,6 +6,7 @@ Pestaña: Dividir video en segmentos (chunks) de duración configurable sin pér
 
 import os
 from pathlib import Path
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QSpinBox, QLineEdit, QCheckBox, QStyle

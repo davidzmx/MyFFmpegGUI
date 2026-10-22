@@ -878,6 +878,39 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_all_tabs_on_finished_success_notifications(self):
+        """Verifica que todos los tabs puedan mostrar su notificación de éxito sin errores de NameError o Qt."""
+        from unittest.mock import patch
+        from ui.tab_audio import TabAudio
+        from ui.tab_convert_video import TabConvertVideo
+        from ui.tab_extract_frames import TabExtractFrames
+        from ui.tab_create_video import TabCreateVideo
+        from ui.tab_segment import TabSegment
+        from ui.tab_concat import TabConcat
+
+        get_paths = lambda: (self.ffmpeg_path, self.ffprobe_path)
+
+        tabs = [
+            TabAudio(get_paths),
+            TabConvertVideo(get_paths),
+            TabExtractFrames(get_paths),
+            TabCreateVideo(get_paths),
+            TabSegment(get_paths),
+            TabConcat(get_paths),
+        ]
+
+        from PyQt5.QtWidgets import QMessageBox
+
+        with patch.object(QMessageBox, "exec_", return_value=0), \
+             patch.object(QMessageBox, "exec", return_value=0), \
+             patch.object(QMessageBox, "warning", return_value=0), \
+             patch.object(QMessageBox, "information", return_value=0):
+            for tab in tabs:
+                # Debe ejecutarse limpiamente sin lanzar NameError (ej: Qt.RichText)
+                tab._on_finished(True, "Proceso completado con éxito", self.test_video)
+                tab._on_finished(False, "Error simulado", "")
+                tab.close()
+
 
 if __name__ == "__main__":
     unittest.main()

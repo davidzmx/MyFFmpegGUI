@@ -8,6 +8,7 @@ import os
 import glob
 import re
 from pathlib import Path
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QDoubleSpinBox, QLineEdit, QCheckBox, QStyle

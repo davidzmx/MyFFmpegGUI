@@ -7,6 +7,7 @@ Soporta Stream Copy (Sin Pérdida), Carpeta Base y Creación Automática de Carp
 
 import os
 from pathlib import Path
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle

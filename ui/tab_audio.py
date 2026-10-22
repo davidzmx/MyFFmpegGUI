@@ -7,6 +7,7 @@ Soporta Carpeta Base y Creación Automática de Carpetas con el Nombre del Archi
 
 import os
 from pathlib import Path
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle

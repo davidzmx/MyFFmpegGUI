@@ -6,6 +6,7 @@ Pestaña: Extraer fotogramas de un video sin pérdida de resolución ni calidad
 
 import os
 from pathlib import Path
+from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QLineEdit, QDoubleSpinBox, QStyle
