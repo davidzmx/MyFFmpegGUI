@@ -1041,6 +1041,7 @@ class TestFFmpegSuite(unittest.TestCase):
             self.assertFalse(tab.console_panel.isHidden())
             self.assertTrue(tab.btn_show_console.isHidden())
             self.assertEqual(tab.console_panel.position, "side")
+            self.assertTrue(tab.log_console.btn_toggle_height.isHidden(), "El botón expandir/reducir debe estar oculto en modo lateral")
 
         # 2. Probar ocultar el panel desde la pestaña
         tab0 = tabs_with_console[0]
@@ -1062,6 +1063,7 @@ class TestFFmpegSuite(unittest.TestCase):
         for tab in tabs_with_console:
             self.assertEqual(tab.splitter_console.orientation(), Qt.Vertical)
             self.assertEqual(tab.console_panel.position, "bottom")
+            self.assertFalse(tab.log_console.btn_toggle_height.isHidden(), "El botón expandir/reducir debe estar visible en modo inferior")
 
         # 5. Probar configuración desde TabSettings
         settings = win.tab_settings

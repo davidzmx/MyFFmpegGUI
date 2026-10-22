@@ -638,14 +638,23 @@ class ConsoleOutputPanel(QWidget):
         self.log_console = LogConsole(self)
         layout.addWidget(self.log_console, 1)
 
+        # Aplicar modo inicial según posición
+        self.set_position_mode(self.position)
+
     def set_position_mode(self, pos: str):
         self.position = pos
-        if pos == "side":
+        is_side = (pos == "side")
+        if is_side:
             self.btn_pos.setText("⬇ Panel Inferior")
             self.btn_pos.setToolTip("Colocar el comando y la terminal en la parte inferior (abajo)")
         else:
             self.btn_pos.setText("➡ Panel Lateral")
             self.btn_pos.setToolTip("Colocar el comando y la terminal en un panel lateral (derecha)")
+
+        if hasattr(self, "log_console") and hasattr(self.log_console, "btn_toggle_height"):
+            if is_side and getattr(self.log_console, "_is_expanded", False):
+                self.log_console._toggle_height()
+            self.log_console.btn_toggle_height.setVisible(not is_side)
 
     def get_command(self) -> str:
         return self.cmd_preview.get_command()
