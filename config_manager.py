@@ -75,7 +75,18 @@ def clean_file_path(path: str) -> str:
     if path.startswith("file://"):
         import urllib.parse
         parsed = urllib.parse.urlparse(path)
-        path = urllib.parse.unquote(parsed.path)
+        if parsed.netloc and len(parsed.netloc) == 2 and parsed.netloc[1] == ":":
+            path = urllib.parse.unquote(parsed.netloc + parsed.path)
+        elif parsed.netloc and parsed.netloc.lower() == "localhost":
+            path = urllib.parse.unquote(parsed.path)
+        elif not parsed.path and parsed.netloc:
+            path = urllib.parse.unquote(parsed.netloc)
+        else:
+            raw_path = parsed.path
+            if parsed.netloc and parsed.netloc != "localhost":
+                raw_path = f"//{parsed.netloc}{raw_path}"
+            path = urllib.parse.unquote(raw_path)
+
         if sys.platform == "win32" and path.startswith("/") and len(path) > 2 and path[2] == ":":
             path = path[1:]
     else:

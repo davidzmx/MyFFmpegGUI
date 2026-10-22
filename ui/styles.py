@@ -33,12 +33,14 @@ ARROW_DOWN_HOVER_URL = _get_asset_path("arrow_down_hover.svg")
 ARROW_UP_URL = _get_asset_path("arrow_up.svg")
 ARROW_UP_HOVER_URL = _get_asset_path("arrow_up_hover.svg")
 
+_DEFAULT_FONT = "'Segoe UI'" if sys.platform == "win32" else "'Ubuntu', 'DejaVu Sans', sans-serif"
+
 DARK_THEME_RAW_QSS = """
 /* Ventana principal, diálogos y explorador de archivos */
 QMainWindow, QDialog, QFileDialog {
     background-color: #13141f;
     color: #e2e8f0;
-    font-family: 'Segoe UI', 'Ubuntu', 'Inter', -apple-system, sans-serif;
+    font-family: __DEFAULT_FONT__;
     font-size: 13px;
 }
 
@@ -55,10 +57,15 @@ QTabWidget::pane {
     top: -1px;
 }
 
+QTabBar {
+    qproperty-drawBase: 0;
+}
+
 QTabBar::tab {
     background-color: #13141f;
     color: #94a3b8;
-    padding: 7px 11px;
+    min-height: 28px;
+    padding: 6px 10px;
     border-top-left-radius: 6px;
     border-top-right-radius: 6px;
     border: 1px solid transparent;
@@ -576,6 +583,7 @@ QLabel#badge_lossless {
 
 DARK_THEME_QSS = (
     DARK_THEME_RAW_QSS
+    .replace("__DEFAULT_FONT__", _DEFAULT_FONT)
     .replace("__ARROW_DOWN_URL__", ARROW_DOWN_URL)
     .replace("__ARROW_DOWN_HOVER_URL__", ARROW_DOWN_HOVER_URL)
     .replace("__ARROW_UP_URL__", ARROW_UP_URL)

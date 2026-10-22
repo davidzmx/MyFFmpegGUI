@@ -385,6 +385,7 @@ class ComparePlaybackWorker(QThread):
 
         self._is_running = True
         self._is_playing = False
+        self._loop = False
         self._current_time = 0.0
         self._speed = 1.0
         self._seek_requested: Optional[float] = None
@@ -400,10 +401,18 @@ class ComparePlaybackWorker(QThread):
 
     def play(self):
         self._mutex.lock()
+        if self._current_time >= self.duration - 0.05:
+            self._current_time = 0.0
+            self._seek_requested = 0.0
         self._is_playing = True
         self._condition.wakeAll()
         self._mutex.unlock()
         self.state_changed.emit(True)
+
+    def set_loop(self, loop: bool):
+        self._mutex.lock()
+        self._loop = bool(loop)
+        self._mutex.unlock()
 
     def pause(self):
         self._mutex.lock()
@@ -640,11 +649,24 @@ class ComparePlaybackWorker(QThread):
             data = self._process.stdout.read(frame_bytes_total)
             if len(data) < frame_bytes_total:
                 # Fin del video
-                self._is_playing = False
-                self._stop_audio()
-                self.state_changed.emit(False)
-                self.finished.emit()
-                continue
+                self._mutex.lock()
+                is_loop = self._loop
+                self._mutex.unlock()
+
+                if is_loop and self._is_running:
+                    self._current_time = 0.0
+                    self._process = self._start_stream(0.0)
+                    if self._is_playing:
+                        self._restart_audio(0.0)
+                    self.time_updated.emit(0.0)
+                    continue
+                else:
+                    self._is_playing = False
+                    self._current_time = self.duration
+                    self._stop_audio()
+                    self.state_changed.emit(False)
+                    self.finished.emit()
+                    continue
 
             # Separar fotogramas de A y B
             img_a = QImage(data[:frame_bytes_single], w, h, w * 3, QImage.Format_RGB888).copy()
@@ -830,6 +852,28 @@ class VideoComparePlayerDialog(QDialog):
         self.btn_step_fwd.setFixedSize(30, 28)
         self.btn_step_fwd.clicked.connect(lambda: self.worker.step(1.0))
         h_controls.addWidget(self.btn_step_fwd)
+
+        # Botón Repetición Continua (Bucle / Loop)
+        self.btn_loop = QPushButton("Bucle", self)
+        self.btn_loop.setIcon(self.style().standardIcon(QStyle.SP_BrowserReload))
+        self.btn_loop.setCheckable(True)
+        self.btn_loop.setChecked(False)
+        self.btn_loop.setFixedHeight(28)
+        self.btn_loop.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b; color: #94a3b8; border: 1px solid #475569;
+                border-radius: 4px; padding: 4px 8px; font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: #334155; color: #f8fafc;
+            }
+            QPushButton:checked {
+                background-color: #0284c7; color: white; font-weight: bold; border: 1px solid #38bdf8;
+            }
+        """)
+        self.btn_loop.setToolTip("Repetición continua (Bucle activado / desactivado) - [L]")
+        self.btn_loop.clicked.connect(self._toggle_loop)
+        h_controls.addWidget(self.btn_loop)
 
         # Separador vertical
         sep1 = QFrame()
@@ -1132,6 +1176,7 @@ class VideoComparePlayerDialog(QDialog):
         QShortcut(QKeySequence(Qt.Key_M), self, self._toggle_mute)
         QShortcut(QKeySequence(Qt.Key_V), self, self._toggle_mode_key)
         QShortcut(QKeySequence(Qt.Key_S), self, self._toggle_mode_key)
+        QShortcut(QKeySequence(Qt.Key_L), self, self._toggle_loop_shortcut)
 
     def _compute_render_resolution(self) -> Tuple[int, int]:
         """
@@ -1188,6 +1233,7 @@ class VideoComparePlayerDialog(QDialog):
             render_h=self.render_h,
             parent=self
         )
+        self.worker.set_loop(self.btn_loop.isChecked())
         self.worker.frame_ready.connect(self._on_frame_ready)
         self.worker.time_updated.connect(self._on_time_updated)
         self.worker.state_changed.connect(self._on_playback_state_changed)
@@ -1225,7 +1271,16 @@ class VideoComparePlayerDialog(QDialog):
         self._on_playback_state_changed(False)
 
     def _on_toggle_play(self):
+        if not self.worker._is_playing and self.worker._current_time >= self.duration - 0.05:
+            self.worker.seek(0.0)
         self.worker.toggle_play()
+
+    def _toggle_loop(self):
+        self.worker.set_loop(self.btn_loop.isChecked())
+
+    def _toggle_loop_shortcut(self):
+        self.btn_loop.setChecked(not self.btn_loop.isChecked())
+        self._toggle_loop()
 
     def _on_slider_pressed(self):
         self.is_seeking = True

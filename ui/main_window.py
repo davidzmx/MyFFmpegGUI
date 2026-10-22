@@ -38,7 +38,7 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
 
         self.resize(1000, 780)
-        self.setMinimumSize(880, 640)
+        self.setMinimumSize(960, 640)
 
         # Contenedor central
         central_widget = QWidget(self)
@@ -85,7 +85,7 @@ class MainWindow(QMainWindow):
 
         # Tabs / Pestañas
         self.tabs = QTabWidget(self)
-        self.tabs.setUsesScrollButtons(False)
+        self.tabs.setUsesScrollButtons(True)
         self.tabs.setElideMode(Qt.ElideNone)
         self.tab_settings = TabSettings(self, self)
 

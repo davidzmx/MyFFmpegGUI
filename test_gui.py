@@ -32,6 +32,9 @@ class TestFFmpegSuite(unittest.TestCase):
     def setUpClass(cls):
         from ui.styles import DARK_THEME_QSS, get_dark_palette, configure_dark_icon_theme
         cls.app = QApplication.instance() or QApplication(sys.argv)
+        from PyQt5.QtGui import QFont
+        font_family = "Segoe UI" if sys.platform == "win32" else "Ubuntu"
+        cls.app.setFont(QFont(font_family, 9 if sys.platform == "win32" else 10))
         configure_dark_icon_theme()
         cls.app.setPalette(get_dark_palette())
         cls.app.setStyleSheet(DARK_THEME_QSS)
@@ -835,6 +838,21 @@ class TestFFmpegSuite(unittest.TestCase):
         # Probar paso de fotograma / salto
         player.worker.step(1.0)
         self.assertEqual(player.worker._seek_requested, 1.0)
+
+        # Probar repetición continua (bucle)
+        self.assertFalse(player.btn_loop.isChecked())
+        self.assertFalse(player.worker._loop)
+        player.btn_loop.setChecked(True)
+        player._toggle_loop()
+        self.assertTrue(player.worker._loop)
+        player._toggle_loop_shortcut()
+        self.assertFalse(player.worker._loop)
+        self.assertFalse(player.btn_loop.isChecked())
+
+        # Probar que al llegar al final, reproducir reinicia desde el inicio (0.0s)
+        player.worker._current_time = player.duration
+        player._on_toggle_play()
+        self.assertEqual(player.worker._seek_requested, 0.0)
 
         # Cerrar el reproductor
         player.close()

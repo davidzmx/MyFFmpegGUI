@@ -11,7 +11,7 @@ import sys
 import os
 import argparse
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QFont
 from PyQt5.QtCore import Qt
 
 import config_manager
@@ -145,6 +145,10 @@ def main():
 
     # Configurar tema de iconos oscuro para máxima legibilidad en botones y carpetas
     configure_dark_icon_theme()
+
+    # Establecer tipografía nativa del sistema para evitar recorte o deformación de fuentes
+    font_family = "Segoe UI" if sys.platform == "win32" else "Ubuntu"
+    app.setFont(QFont(font_family, 9 if sys.platform == "win32" else 10))
 
     # Aplicar paleta oscura del sistema (garantiza fondo oscuro en QFileDialog y vistas nativas)
     app.setPalette(get_dark_palette())

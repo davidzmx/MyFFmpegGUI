@@ -149,7 +149,7 @@ def execute_quick_action(action_id: str, file_path: str) -> bool:
     cmd_str = cmd_str.replace("{ext}", ext)
 
     try:
-        parts = shlex.split(cmd_str, posix=(not sys.platform.startswith("win")))
+        parts = [p.strip('"\'') for p in shlex.split(cmd_str, posix=False)]
         if parts and parts[0] == "ffmpeg":
             parts[0] = configured_ffmpeg
     except Exception:
