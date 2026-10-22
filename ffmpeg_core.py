@@ -285,6 +285,79 @@ def build_audio_convert_command(
     return cmd
 
 
+def build_add_audio_to_video_command(
+    ffmpeg_path: str,
+    video_file: str,
+    audio_file: str,
+    output_file: str,
+    audio_mode: str = "replace",  # "replace", "mix", "add_track"
+    audio_codec: str = "aac",     # "aac", "copy", "mp3", "flac"
+    shortest: bool = True,
+    has_original_audio: bool = True
+) -> List[str]:
+    """
+    Construye el comando FFmpeg para incorporar, reemplazar o mezclar audio en un video.
+    El video se procesa con Stream Copy (-c:v copy) 100% sin pérdida de calidad ni tiempo.
+    - 'replace': Reemplaza el audio existente o añade audio al video si era mudo.
+    - 'mix': Mezcla el audio original del video con la nueva pista de audio.
+    - 'add_track': Conserva el audio original y añade la nueva pista como pista secundaria.
+    - shortest: Corta el audio si es más largo que el video para evitar fotogramas congelados.
+    """
+    cmd = [
+        ffmpeg_path, "-y",
+        "-i", video_file,
+        "-i", audio_file
+    ]
+
+    # Video stream siempre en copia directa (sin pérdida y ultrarrápido)
+    cmd.extend(["-c:v", "copy"])
+
+    # Determinar parámetros de codificación de audio
+    if audio_codec == "mp3":
+        a_codec_args = ["-c:a", "libmp3lame", "-b:a", "320k"]
+    elif audio_codec == "flac":
+        a_codec_args = ["-c:a", "flac"]
+    elif audio_codec == "copy" and audio_mode != "mix":
+        a_codec_args = ["-c:a", "copy"]
+    else:
+        # Predeterminado: AAC 256k (estándar universal de alta fidelidad)
+        a_codec_args = ["-c:a", "aac", "-b:a", "256k"]
+
+    if audio_mode == "mix" and has_original_audio:
+        # Mezclar requiere recodificar audio con amix
+        cmd.extend([
+            "-filter_complex", "[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=2[aout]",
+            "-map", "0:v:0",
+            "-map", "[aout]"
+        ])
+        if audio_codec == "copy":
+            cmd.extend(["-c:a", "aac", "-b:a", "256k"])
+        else:
+            cmd.extend(a_codec_args)
+    elif audio_mode == "add_track":
+        # Conservar audio original y añadir el nuevo como segunda pista
+        cmd.extend([
+            "-map", "0:v:0",
+            "-map", "0:a?",
+            "-map", "1:a:0"
+        ])
+        cmd.extend(a_codec_args)
+    else:
+        # "replace" (o "mix" si el video original no contenía audio)
+        cmd.extend([
+            "-map", "0:v:0",
+            "-map", "1:a:0"
+        ])
+        cmd.extend(a_codec_args)
+
+    if shortest:
+        cmd.append("-shortest")
+
+    cmd.append(output_file)
+    return cmd
+
+
+
 def build_convert_video_command(
     ffmpeg_path: str,
     input_file: str,

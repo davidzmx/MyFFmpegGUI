@@ -30,7 +30,7 @@ def parse_args():
     )
     parser.add_argument(
         "--tab",
-        choices=["audio", "video", "frames", "create", "segment", "concat", "settings"],
+        choices=["audio", "add_audio", "video", "frames", "create", "segment", "concat", "compare", "settings"],
         default=None,
         help="Pestaña a activar inicialmente al abrir la aplicación"
     )

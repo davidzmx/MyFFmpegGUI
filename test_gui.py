@@ -233,8 +233,8 @@ class TestFFmpegSuite(unittest.TestCase):
         from ui.main_window import MainWindow
         win = MainWindow()
         self.assertIsNotNone(win)
-        # 8 pestañas completas
-        self.assertEqual(win.tabs.count(), 8)
+        # 9 pestañas completas (incluye Poner Audio a Video)
+        self.assertEqual(win.tabs.count(), 9)
         win.close()
 
     def test_10_command_preview_and_base_folder_visibility(self):
@@ -721,7 +721,7 @@ class TestFFmpegSuite(unittest.TestCase):
 
         # 6. Probar integración en MainWindow y TabCompare
         win = MainWindow(initial_tab="compare")
-        self.assertEqual(win.tabs.count(), 8)
+        self.assertEqual(win.tabs.count(), 9)
         compare_tab = win.tab_compare
 
         # Cargar videos en la interfaz
@@ -888,10 +888,13 @@ class TestFFmpegSuite(unittest.TestCase):
         from ui.tab_segment import TabSegment
         from ui.tab_concat import TabConcat
 
+        from ui.tab_add_audio import TabAddAudio
+
         get_paths = lambda: (self.ffmpeg_path, self.ffprobe_path)
 
         tabs = [
             TabAudio(get_paths),
+            TabAddAudio(get_paths),
             TabConvertVideo(get_paths),
             TabExtractFrames(get_paths),
             TabCreateVideo(get_paths),
@@ -910,6 +913,83 @@ class TestFFmpegSuite(unittest.TestCase):
                 tab._on_finished(True, "Proceso completado con éxito", self.test_video)
                 tab._on_finished(False, "Error simulado", "")
                 tab.close()
+
+    def test_add_audio_to_video_core_and_ui(self):
+        """Verifica la generación de comandos y la funcionalidad del tab 'Poner Audio a Video'."""
+        audio_file = os.path.join(self.tmp_path, "sample_audio.mp3")
+        cmd_aud = [
+            self.ffmpeg_path, "-y",
+            "-f", "lavfi", "-i", "sine=frequency=520:duration=4",
+            "-c:a", "libmp3lame", "-b:a", "192k",
+            audio_file
+        ]
+        res = subprocess.run(cmd_aud, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res.returncode, 0, "No se pudo generar el audio sintético de prueba")
+
+        out_replace = os.path.join(self.tmp_path, "out_replace.mp4")
+        out_mix = os.path.join(self.tmp_path, "out_mix.mp4")
+        out_add_track = os.path.join(self.tmp_path, "out_add_track.mp4")
+
+        # 1. Probar comando replace
+        cmd1 = ffmpeg_core.build_add_audio_to_video_command(
+            self.ffmpeg_path, self.test_video, audio_file, out_replace,
+            audio_mode="replace", audio_codec="aac", shortest=True
+        )
+        self.assertIn("-c:v", cmd1)
+        self.assertIn("copy", cmd1)
+        self.assertIn("-shortest", cmd1)
+        res1 = subprocess.run(cmd1, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res1.returncode, 0, f"Error en replace audio: {res1.stderr.decode()}")
+        self.assertTrue(os.path.isfile(out_replace))
+
+        # 2. Probar comando mix
+        cmd2 = ffmpeg_core.build_add_audio_to_video_command(
+            self.ffmpeg_path, self.test_video, audio_file, out_mix,
+            audio_mode="mix", audio_codec="aac", shortest=True, has_original_audio=True
+        )
+        self.assertIn("amix=inputs=2", " ".join(cmd2))
+        res2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res2.returncode, 0, f"Error en mix audio: {res2.stderr.decode()}")
+        self.assertTrue(os.path.isfile(out_mix))
+
+        # 3. Probar comando add_track
+        cmd3 = ffmpeg_core.build_add_audio_to_video_command(
+            self.ffmpeg_path, self.test_video, audio_file, out_add_track,
+            audio_mode="add_track", audio_codec="mp3", shortest=True
+        )
+        self.assertIn("0:a?", " ".join(cmd3))
+        res3 = subprocess.run(cmd3, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res3.returncode, 0, f"Error en add_track audio: {res3.stderr.decode()}")
+        self.assertTrue(os.path.isfile(out_add_track))
+
+        # 4. Probar TabAddAudio en MainWindow
+        win = MainWindow()
+        self.assertTrue(hasattr(win, "tab_add_audio"))
+        self.assertIn("add_audio", win.tab_map)
+
+        tab = win.tab_add_audio
+        tab.video_selector.set_path(self.test_video)
+        self.assertTrue(tab.has_original_audio)
+        self.assertGreater(tab.video_duration, 0.0)
+
+        tab.audio_selector.set_path(audio_file)
+        self.assertTrue(tab.btn_clear_audio.isEnabled())
+
+        # Probar cambio de modo
+        tab.combo_audio_mode.setCurrentIndex(1)  # mix
+        preview_text = tab.cmd_preview.get_command()
+        self.assertIn("amix", preview_text)
+
+        tab.combo_audio_mode.setCurrentIndex(2)  # add_track
+        preview_text = tab.cmd_preview.get_command()
+        self.assertIn("0:a?", preview_text)
+
+        # Probar limpiar audio
+        tab._clear_audio()
+        self.assertEqual(tab.audio_selector.get_path(), "")
+        self.assertFalse(tab.btn_clear_audio.isEnabled())
+
+        win.close()
 
 
 if __name__ == "__main__":

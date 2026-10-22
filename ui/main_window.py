@@ -24,6 +24,7 @@ from ui.tab_create_video import TabCreateVideo
 from ui.tab_segment import TabSegment
 from ui.tab_concat import TabConcat
 from ui.tab_compare import TabCompare
+from ui.tab_add_audio import TabAddAudio
 from ui.tab_settings import TabSettings
 
 
@@ -91,6 +92,7 @@ class MainWindow(QMainWindow):
 
         # Instanciar cada una de las pestañas
         self.tab_audio = TabAudio(self.get_active_ffmpeg_paths, self)
+        self.tab_add_audio = TabAddAudio(self.get_active_ffmpeg_paths, self)
         self.tab_convert = TabConvertVideo(self.get_active_ffmpeg_paths, self)
         self.tab_extract = TabExtractFrames(self.get_active_ffmpeg_paths, self)
         self.tab_create = TabCreateVideo(self.get_active_ffmpeg_paths, self)
@@ -101,6 +103,7 @@ class MainWindow(QMainWindow):
         # Títulos limpios, concisos y compatibles con fuentes de Windows y Linux
         self.tabs.addTab(self._wrap_tab(self.tab_audio), "Audio (MP3 / WAV)")
         self.tabs.addTab(self._wrap_tab(self.tab_convert), "Convertir Video")
+        self.tabs.addTab(self._wrap_tab(self.tab_add_audio), "Poner Audio a Video")
         self.tabs.addTab(self._wrap_tab(self.tab_extract), "Extraer Fotogramas")
         self.tabs.addTab(self._wrap_tab(self.tab_create), "Crear Video")
         self.tabs.addTab(self._wrap_tab(self.tab_segment), "Segmentar Video")
@@ -112,12 +115,13 @@ class MainWindow(QMainWindow):
         self.tab_map = {
             "audio": (0, self.tab_audio),
             "video": (1, self.tab_convert),
-            "frames": (2, self.tab_extract),
-            "create": (3, self.tab_create),
-            "segment": (4, self.tab_segment),
-            "concat": (5, self.tab_concat),
-            "compare": (6, self.tab_compare),
-            "settings": (7, self.tab_settings),
+            "add_audio": (2, self.tab_add_audio),
+            "frames": (3, self.tab_extract),
+            "create": (4, self.tab_create),
+            "segment": (5, self.tab_segment),
+            "concat": (6, self.tab_concat),
+            "compare": (7, self.tab_compare),
+            "settings": (8, self.tab_settings),
         }
 
         # Forzar activación inmediata de layout al cambiar de pestaña
@@ -210,6 +214,7 @@ class MainWindow(QMainWindow):
         """Asegura la cancelación y terminación limpia de todos los subprocesos y trabajadores al cerrar."""
         tabs_to_clean = (
             getattr(self, "tab_audio", None),
+            getattr(self, "tab_add_audio", None),
             getattr(self, "tab_convert", None),
             getattr(self, "tab_extract", None),
             getattr(self, "tab_create", None),
