@@ -330,7 +330,7 @@ class TabSettings(QWidget):
         lbl_context_info = QLabel(
             "Personaliza las opciones y el <b>orden</b> en que aparecerán al hacer <b>clic derecho sobre cualquier archivo multimedia</b> "
             "en tu explorador de archivos (Dolphin, Nautilus o Windows Explorer). Puedes <b>reordenar</b> con los botones "
-            "▲ / ▼, activar/desactivar opciones, o añadir tus propios <b>comandos rápidos que se ejecutan sin abrir la interfaz</b>:"
+            "Subir / Bajar, activar/desactivar opciones, o añadir tus propios <b>comandos rápidos que se ejecutan sin abrir la interfaz</b>:"
         )
         lbl_context_info.setTextFormat(1)
         lbl_context_info.setWordWrap(True)
@@ -577,18 +577,20 @@ class TabSettings(QWidget):
             h_cell.setSpacing(4)
             h_cell.setAlignment(Qt.AlignCenter)
 
-            btn_up = QPushButton("▲")
+            btn_up = QPushButton()
+            btn_up.setIcon(self.style().standardIcon(QStyle.SP_ArrowUp))
             btn_up.setToolTip("Subir esta opción en el menú de clic derecho")
-            btn_up.setFixedSize(26, 22)
-            btn_up.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; border-radius: 3px; font-size: 10px;")
+            btn_up.setFixedSize(28, 22)
+            btn_up.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; border-radius: 3px;")
             btn_up.setEnabled(row > 0)
             btn_up.clicked.connect(lambda _, target_id=act_id: self._move_action(target_id, -1))
             h_cell.addWidget(btn_up)
 
-            btn_down = QPushButton("▼")
+            btn_down = QPushButton()
+            btn_down.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
             btn_down.setToolTip("Bajar esta opción en el menú de clic derecho")
-            btn_down.setFixedSize(26, 22)
-            btn_down.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; border-radius: 3px; font-size: 10px;")
+            btn_down.setFixedSize(28, 22)
+            btn_down.setStyleSheet("background-color: #1e293b; color: #38bdf8; font-weight: bold; border-radius: 3px;")
             btn_down.setEnabled(row < len(actions) - 1)
             btn_down.clicked.connect(lambda _, target_id=act_id: self._move_action(target_id, 1))
             h_cell.addWidget(btn_down)

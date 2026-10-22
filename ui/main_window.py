@@ -90,7 +90,7 @@ class MainWindow(QMainWindow):
         header_layout.addLayout(title_vbox)
         header_layout.addStretch()
 
-        badge = QLabel("⚡ 100% Sin Pérdida (Stream Copy / Lossless)")
+        badge = QLabel("100% Sin Pérdida (Stream Copy / Lossless)")
         badge.setObjectName("badge_lossless")
         header_layout.addWidget(badge, alignment=Qt.AlignVCenter)
 

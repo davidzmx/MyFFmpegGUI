@@ -13,6 +13,7 @@ Soporta Stream Copy (-c:v copy) para conservar el 100% de la calidad de video a 
 import os
 from pathlib import Path
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle, QSlider
@@ -89,7 +90,9 @@ class TabAddAudio(QWidget):
         grid_opts.setSpacing(10)
         grid_opts.setContentsMargins(4, 8, 4, 8)
 
-        grid_opts.addWidget(QLabel("Modo de audio:"), 0, 0)
+        lbl_mode = QLabel("Modo de audio:")
+        lbl_mode.setMinimumWidth(150)
+        grid_opts.addWidget(lbl_mode, 0, 0)
         self.combo_audio_mode = QComboBox()
         self.combo_audio_mode.addItem("Reemplazar audio del video (o añadir si es mudo)", "replace")
         self.combo_audio_mode.addItem("Mezclar con el audio original del video", "mix")
@@ -97,20 +100,22 @@ class TabAddAudio(QWidget):
         self.combo_audio_mode.currentIndexChanged.connect(self._on_audio_mode_changed)
         grid_opts.addWidget(self.combo_audio_mode, 0, 1)
 
-        grid_opts.addWidget(QLabel("Códec / Formato de Audio:"), 0, 2)
+        lbl_codec = QLabel("Códec / Formato de Audio:")
+        lbl_codec.setMinimumWidth(150)
+        grid_opts.addWidget(lbl_codec, 1, 0)
         self.combo_audio_codec = QComboBox()
         self.combo_audio_codec.addItem("AAC 256 kbps (Estándar de Alta Fidelidad - Recomendado)", "aac")
         self.combo_audio_codec.addItem("Copia Directa (Stream Copy - Sin recodificar audio)", "copy")
         self.combo_audio_codec.addItem("MP3 320 kbps (Máxima Calidad MP3)", "mp3")
         self.combo_audio_codec.addItem("FLAC (Comprimido Sin Pérdida)", "flac")
         self.combo_audio_codec.currentIndexChanged.connect(lambda _: self._update_command_preview())
-        grid_opts.addWidget(self.combo_audio_codec, 0, 3)
+        grid_opts.addWidget(self.combo_audio_codec, 1, 1)
 
         self.chk_shortest = QCheckBox("Ajustar al final del video (cortar audio sobrante)")
         self.chk_shortest.setChecked(True)
         self.chk_shortest.setToolTip("Si el audio dura más que el video, se corta automáticamente para evitar que el video se quede congelado al final.")
         self.chk_shortest.stateChanged.connect(lambda _: self._update_command_preview())
-        grid_opts.addWidget(self.chk_shortest, 1, 0, 1, 4)
+        grid_opts.addWidget(self.chk_shortest, 2, 0, 1, 2)
 
         layout_opts.addLayout(grid_opts)
 
@@ -122,9 +127,12 @@ class TabAddAudio(QWidget):
 
         # Fila 1: Audio Original
         h_vol_orig = QHBoxLayout()
-        lbl_icon_orig = QLabel("🔊 Volumen audio original:")
-        lbl_icon_orig.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
-        lbl_icon_orig.setMinimumWidth(180)
+        self.icon_vol_orig = QLabel()
+        icon_orig = QIcon.fromTheme("audio-volume-high", self.style().standardIcon(QStyle.SP_MediaVolume))
+        self.icon_vol_orig.setPixmap(icon_orig.pixmap(16, 16))
+        lbl_text_orig = QLabel("Volumen audio original:")
+        lbl_text_orig.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_text_orig.setMinimumWidth(160)
         self.slider_vol_orig = QSlider(Qt.Horizontal)
         self.slider_vol_orig.setRange(0, 200)
         self.slider_vol_orig.setValue(100)
@@ -132,14 +140,17 @@ class TabAddAudio(QWidget):
         self.slider_vol_orig.setTickInterval(50)
         self.slider_vol_orig.valueChanged.connect(self._on_vol_orig_changed)
         self.lbl_vol_orig_val = QLabel("100%")
-        self.lbl_vol_orig_val.setFixedWidth(50)
+        self.lbl_vol_orig_val.setFixedWidth(46)
         self.lbl_vol_orig_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
         btn_reset_orig = QPushButton("100%")
         btn_reset_orig.setToolTip("Restablecer volumen original a 100%")
-        btn_reset_orig.setFixedWidth(45)
+        btn_reset_orig.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 54px;")
+        btn_reset_orig.setFixedWidth(58)
+        btn_reset_orig.setFixedHeight(24)
         btn_reset_orig.clicked.connect(lambda: self.slider_vol_orig.setValue(100))
 
-        h_vol_orig.addWidget(lbl_icon_orig)
+        h_vol_orig.addWidget(self.icon_vol_orig)
+        h_vol_orig.addWidget(lbl_text_orig)
         h_vol_orig.addWidget(self.slider_vol_orig, 1)
         h_vol_orig.addWidget(self.lbl_vol_orig_val)
         h_vol_orig.addWidget(btn_reset_orig)
@@ -147,9 +158,12 @@ class TabAddAudio(QWidget):
 
         # Fila 2: Audio Agregado
         h_vol_added = QHBoxLayout()
-        lbl_icon_added = QLabel("🎵 Volumen audio agregado:")
-        lbl_icon_added.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
-        lbl_icon_added.setMinimumWidth(180)
+        self.icon_vol_added = QLabel()
+        icon_added = QIcon.fromTheme("audio-x-generic", self.style().standardIcon(QStyle.SP_MediaVolume))
+        self.icon_vol_added.setPixmap(icon_added.pixmap(16, 16))
+        lbl_text_added = QLabel("Volumen audio agregado:")
+        lbl_text_added.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_text_added.setMinimumWidth(160)
         self.slider_vol_added = QSlider(Qt.Horizontal)
         self.slider_vol_added.setRange(0, 200)
         self.slider_vol_added.setValue(100)
@@ -157,31 +171,48 @@ class TabAddAudio(QWidget):
         self.slider_vol_added.setTickInterval(50)
         self.slider_vol_added.valueChanged.connect(self._on_vol_added_changed)
         self.lbl_vol_added_val = QLabel("100%")
-        self.lbl_vol_added_val.setFixedWidth(50)
+        self.lbl_vol_added_val.setFixedWidth(46)
         self.lbl_vol_added_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
         btn_reset_added = QPushButton("100%")
         btn_reset_added.setToolTip("Restablecer volumen agregado a 100%")
-        btn_reset_added.setFixedWidth(45)
+        btn_reset_added.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 54px;")
+        btn_reset_added.setFixedWidth(58)
+        btn_reset_added.setFixedHeight(24)
         btn_reset_added.clicked.connect(lambda: self.slider_vol_added.setValue(100))
 
-        h_vol_added.addWidget(lbl_icon_added)
+        h_vol_added.addWidget(self.icon_vol_added)
+        h_vol_added.addWidget(lbl_text_added)
         h_vol_added.addWidget(self.slider_vol_added, 1)
         h_vol_added.addWidget(self.lbl_vol_added_val)
         h_vol_added.addWidget(btn_reset_added)
         layout_mix_vol.addLayout(h_vol_added)
 
-        lbl_mix_hint = QLabel("💡 Consejo: Para música de fondo detrás de una locución o diálogo original, prueba bajar el audio agregado al 30%–50%.")
-        lbl_mix_hint.setStyleSheet("color: #64748b; font-size: 11px;")
-        layout_mix_vol.addWidget(lbl_mix_hint)
+        h_mix_hint = QHBoxLayout()
+        h_mix_hint.setSpacing(6)
+        self.icon_mix_hint = QLabel()
+        icon_hint = QIcon.fromTheme("help-about", self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+        self.icon_mix_hint.setPixmap(icon_hint.pixmap(14, 14))
+        lbl_mix_hint = QLabel("Consejo: Para música de fondo detrás de una locución o diálogo original, prueba bajar el audio agregado al 30%–50%.")
+        lbl_mix_hint.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        h_mix_hint.addWidget(self.icon_mix_hint)
+        h_mix_hint.addWidget(lbl_mix_hint, 1)
+        layout_mix_vol.addLayout(h_mix_hint)
 
         self.widget_mix_volumes.setVisible(False)
         layout_opts.addWidget(self.widget_mix_volumes)
 
+        h_expl = QHBoxLayout()
+        h_expl.setSpacing(6)
+        self.icon_mode_explanation = QLabel()
+        icon_info = QIcon.fromTheme("dialog-information", self.style().standardIcon(QStyle.SP_MessageBoxInformation))
+        self.icon_mode_explanation.setPixmap(icon_info.pixmap(14, 14))
         self.lbl_mode_explanation = QLabel(
-            "💡 Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
+            "Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
         )
         self.lbl_mode_explanation.setStyleSheet("color: #a5b4fc; font-size: 11px;")
-        layout_opts.addWidget(self.lbl_mode_explanation)
+        h_expl.addWidget(self.icon_mode_explanation)
+        h_expl.addWidget(self.lbl_mode_explanation, 1)
+        layout_opts.addLayout(h_expl)
 
         self.lbl_audio_warning = QLabel("")
         self.lbl_audio_warning.setStyleSheet("color: #f59e0b; font-size: 11px;")
@@ -365,15 +396,15 @@ class TabAddAudio(QWidget):
         mode = self.combo_audio_mode.currentData()
         if mode == "mix":
             self.lbl_mode_explanation.setText(
-                "💡 Modo Mezcla: Funde el audio original del video con la nueva pista en una sola (ambos audios sonarán simultáneamente)."
+                "Modo Mezcla: Funde el audio original del video con la nueva pista en una sola (ambos audios sonarán simultáneamente)."
             )
         elif mode == "add_track":
             self.lbl_mode_explanation.setText(
-                "💡 Modo Pista Secundaria: Conserva el audio original (Pista 1) y añade el nuevo como pista adicional (Pista 2, seleccionable en el reproductor; no suenan a la vez)."
+                "Modo Pista Secundaria: Conserva el audio original (Pista 1) y añade el nuevo como pista adicional (Pista 2, seleccionable en el reproductor; no suenan a la vez)."
             )
         else:
             self.lbl_mode_explanation.setText(
-                "💡 Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
+                "Modo Reemplazo: Sustituye cualquier audio previo por el nuevo (o le añade audio si el video era mudo)."
             )
 
     def _check_audio_warning(self):

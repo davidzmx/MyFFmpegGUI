@@ -13,6 +13,7 @@ from PyQt5.QtWidgets import (
     QSplitter, QSizePolicy, QScrollArea, QFrame, QStyle, QRadioButton, QSpinBox, QSlider
 )
 from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QIcon
 from ui.widgets import (
     FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
     ConsoleOutputPanel, setup_tab_console_layout
@@ -143,7 +144,7 @@ class TabConcat(QWidget):
         layout_stutter_box.setContentsMargins(16, 2, 0, 4)
         layout_stutter_box.setSpacing(6)
 
-        self.radio_stutter_auto = QRadioButton("🤖 Automático inteligente (mpdecimate - detecta y descarta cuadros duplicados)")
+        self.radio_stutter_auto = QRadioButton("Automático inteligente (mpdecimate - detecta y descarta cuadros duplicados)")
         self.radio_stutter_auto.setChecked(True)
         self.radio_stutter_auto.setToolTip("Analiza el flujo de video y descarta automáticamente cuadros idénticos generados en la unión.")
         self.radio_stutter_auto.toggled.connect(self._on_stutter_mode_changed)
@@ -151,7 +152,7 @@ class TabConcat(QWidget):
 
         h_stutter_manual = QHBoxLayout()
         h_stutter_manual.setSpacing(8)
-        self.radio_stutter_manual = QRadioButton("✂ Manual: Omitir primeros fotogramas de cada segmento siguiente:")
+        self.radio_stutter_manual = QRadioButton("Manual: Omitir primeros fotogramas de cada segmento siguiente:")
         self.radio_stutter_manual.setToolTip("Descarta un número fijo de fotogramas al inicio de cada segmento posterior para eliminar fotogramas clave duplicados.")
         self.radio_stutter_manual.toggled.connect(self._on_stutter_mode_changed)
         h_stutter_manual.addWidget(self.radio_stutter_manual)
@@ -233,9 +234,12 @@ class TabConcat(QWidget):
 
         # Fila 1: Audio Original
         h_vol_orig = QHBoxLayout()
-        lbl_icon_orig = QLabel("🔊 Volumen audio original:")
-        lbl_icon_orig.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
-        lbl_icon_orig.setMinimumWidth(180)
+        self.icon_vol_orig = QLabel()
+        icon_orig = QIcon.fromTheme("audio-volume-high", self.style().standardIcon(QStyle.SP_MediaVolume))
+        self.icon_vol_orig.setPixmap(icon_orig.pixmap(16, 16))
+        lbl_text_orig = QLabel("Volumen audio original:")
+        lbl_text_orig.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_text_orig.setMinimumWidth(160)
         self.slider_vol_orig = QSlider(Qt.Horizontal)
         self.slider_vol_orig.setRange(0, 200)
         self.slider_vol_orig.setValue(100)
@@ -243,14 +247,17 @@ class TabConcat(QWidget):
         self.slider_vol_orig.setTickInterval(50)
         self.slider_vol_orig.valueChanged.connect(self._on_vol_orig_changed)
         self.lbl_vol_orig_val = QLabel("100%")
-        self.lbl_vol_orig_val.setFixedWidth(50)
+        self.lbl_vol_orig_val.setFixedWidth(46)
         self.lbl_vol_orig_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
         btn_reset_orig = QPushButton("100%")
         btn_reset_orig.setToolTip("Restablecer volumen original a 100%")
-        btn_reset_orig.setFixedWidth(45)
+        btn_reset_orig.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 54px;")
+        btn_reset_orig.setFixedWidth(58)
+        btn_reset_orig.setFixedHeight(24)
         btn_reset_orig.clicked.connect(lambda: self.slider_vol_orig.setValue(100))
 
-        h_vol_orig.addWidget(lbl_icon_orig)
+        h_vol_orig.addWidget(self.icon_vol_orig)
+        h_vol_orig.addWidget(lbl_text_orig)
         h_vol_orig.addWidget(self.slider_vol_orig, 1)
         h_vol_orig.addWidget(self.lbl_vol_orig_val)
         h_vol_orig.addWidget(btn_reset_orig)
@@ -258,9 +265,12 @@ class TabConcat(QWidget):
 
         # Fila 2: Audio Agregado
         h_vol_added = QHBoxLayout()
-        lbl_icon_added = QLabel("🎵 Volumen audio agregado:")
-        lbl_icon_added.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
-        lbl_icon_added.setMinimumWidth(180)
+        self.icon_vol_added = QLabel()
+        icon_added = QIcon.fromTheme("audio-x-generic", self.style().standardIcon(QStyle.SP_MediaVolume))
+        self.icon_vol_added.setPixmap(icon_added.pixmap(16, 16))
+        lbl_text_added = QLabel("Volumen audio agregado:")
+        lbl_text_added.setStyleSheet("font-weight: 500; font-size: 12px; color: #cbd5e1;")
+        lbl_text_added.setMinimumWidth(160)
         self.slider_vol_added = QSlider(Qt.Horizontal)
         self.slider_vol_added.setRange(0, 200)
         self.slider_vol_added.setValue(100)
@@ -268,14 +278,17 @@ class TabConcat(QWidget):
         self.slider_vol_added.setTickInterval(50)
         self.slider_vol_added.valueChanged.connect(self._on_vol_added_changed)
         self.lbl_vol_added_val = QLabel("100%")
-        self.lbl_vol_added_val.setFixedWidth(50)
+        self.lbl_vol_added_val.setFixedWidth(46)
         self.lbl_vol_added_val.setStyleSheet("font-weight: bold; color: #38bdf8;")
         btn_reset_added = QPushButton("100%")
         btn_reset_added.setToolTip("Restablecer volumen agregado a 100%")
-        btn_reset_added.setFixedWidth(45)
+        btn_reset_added.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 54px;")
+        btn_reset_added.setFixedWidth(58)
+        btn_reset_added.setFixedHeight(24)
         btn_reset_added.clicked.connect(lambda: self.slider_vol_added.setValue(100))
 
-        h_vol_added.addWidget(lbl_icon_added)
+        h_vol_added.addWidget(self.icon_vol_added)
+        h_vol_added.addWidget(lbl_text_added)
         h_vol_added.addWidget(self.slider_vol_added, 1)
         h_vol_added.addWidget(self.lbl_vol_added_val)
         h_vol_added.addWidget(btn_reset_added)

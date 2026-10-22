@@ -269,7 +269,8 @@ class LogConsole(QWidget):
         btn_clear.setFixedHeight(26)
         btn_clear.clicked.connect(self.clear_logs)
 
-        self.btn_toggle_height = QPushButton("↕ Expandir")
+        self.btn_toggle_height = QPushButton("Expandir")
+        self.btn_toggle_height.setIcon(self.style().standardIcon(QStyle.SP_TitleBarUnshadeButton))
         self.btn_toggle_height.setToolTip("Alternar entre altura compacta y expandida de la terminal")
         self.btn_toggle_height.setFixedHeight(26)
         self.btn_toggle_height.clicked.connect(self._toggle_height)
@@ -294,11 +295,13 @@ class LogConsole(QWidget):
         self._is_expanded = not self._is_expanded
         if self._is_expanded:
             self.text_edit.setMinimumHeight(240)
-            self.btn_toggle_height.setText("↕ Reducir")
+            self.btn_toggle_height.setText("Reducir")
+            self.btn_toggle_height.setIcon(self.style().standardIcon(QStyle.SP_TitleBarShadeButton))
         else:
             self.text_edit.setMinimumHeight(45)
             self.text_edit.setMaximumHeight(16777215)
-            self.btn_toggle_height.setText("↕ Expandir")
+            self.btn_toggle_height.setText("Expandir")
+            self.btn_toggle_height.setIcon(self.style().standardIcon(QStyle.SP_TitleBarUnshadeButton))
 
     def append_log(self, text: str):
         self.text_edit.appendPlainText(text)
@@ -366,8 +369,13 @@ class CommandPreviewWidget(QWidget):
         layout.setSpacing(4)
 
         header_layout = QHBoxLayout()
-        self.lbl_title = QLabel(f"▶ {title}")
+        header_layout.setSpacing(6)
+        self.icon_title = QLabel()
+        self.icon_title.setPixmap(self.style().standardIcon(QStyle.SP_MediaPlay).pixmap(12, 12))
+        header_layout.addWidget(self.icon_title)
+        self.lbl_title = QLabel(title)
         self.lbl_title.setStyleSheet("font-weight: bold; color: #38bdf8; font-size: 11px;")
+        header_layout.addWidget(self.lbl_title)
 
         self.btn_copy = QPushButton("Copiar Comando")
         self.btn_copy.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
@@ -446,7 +454,8 @@ class CommandPreviewWidget(QWidget):
     def _copy_to_clipboard(self):
         if self._current_cmd_str:
             QApplication.clipboard().setText(self._current_cmd_str)
-            self.btn_copy.setText("✓ ¡Copiado!")
+            self.btn_copy.setText("¡Copiado!")
+            self.btn_copy.setIcon(self.style().standardIcon(QStyle.SP_DialogApplyButton))
             def _reset():
                 self.btn_copy.setText("Copiar Comando")
                 self.btn_copy.setIcon(self.style().standardIcon(QStyle.SP_FileIcon))
@@ -575,13 +584,18 @@ class ConsoleOutputPanel(QWidget):
         header.setContentsMargins(2, 0, 2, 0)
         header.setSpacing(6)
 
-        self.lbl_panel_title = QLabel("🖥️ Comando y Terminal FFmpeg")
+        self.icon_panel_title = QLabel()
+        self.icon_panel_title.setPixmap(self.style().standardIcon(QStyle.SP_DesktopIcon).pixmap(16, 16))
+        header.addWidget(self.icon_panel_title)
+
+        self.lbl_panel_title = QLabel("Comando y Terminal FFmpeg")
         self.lbl_panel_title.setStyleSheet("font-weight: bold; color: #a5b4fc; font-size: 11px;")
         header.addWidget(self.lbl_panel_title)
 
         header.addStretch()
 
-        self.btn_pos = QPushButton("➡ Panel Lateral")
+        self.btn_pos = QPushButton("Panel Lateral")
+        self.btn_pos.setIcon(self.style().standardIcon(QStyle.SP_ArrowRight))
         self.btn_pos.setToolTip("Alternar entre ubicación Inferior (abajo) y Lateral (derecha)")
         self.btn_pos.setFixedHeight(24)
         self.btn_pos.setCursor(Qt.PointingHandCursor)
@@ -605,7 +619,8 @@ class ConsoleOutputPanel(QWidget):
         self.btn_toggle_pos = self.btn_pos
         header.addWidget(self.btn_pos)
 
-        self.btn_hide = QPushButton("✖ Ocultar Panel")
+        self.btn_hide = QPushButton("Ocultar Panel")
+        self.btn_hide.setIcon(self.style().standardIcon(QStyle.SP_TitleBarCloseButton))
         self.btn_hide.setToolTip("Ocultar panel de comando y terminal para ganar espacio")
         self.btn_hide.setFixedHeight(24)
         self.btn_hide.setCursor(Qt.PointingHandCursor)
@@ -645,10 +660,12 @@ class ConsoleOutputPanel(QWidget):
         self.position = pos
         is_side = (pos == "side")
         if is_side:
-            self.btn_pos.setText("⬇ Panel Inferior")
+            self.btn_pos.setText("Panel Inferior")
+            self.btn_pos.setIcon(self.style().standardIcon(QStyle.SP_ArrowDown))
             self.btn_pos.setToolTip("Colocar el comando y la terminal en la parte inferior (abajo)")
         else:
-            self.btn_pos.setText("➡ Panel Lateral")
+            self.btn_pos.setText("Panel Lateral")
+            self.btn_pos.setIcon(self.style().standardIcon(QStyle.SP_ArrowRight))
             self.btn_pos.setToolTip("Colocar el comando y la terminal en un panel lateral (derecha)")
 
         if hasattr(self, "log_console") and hasattr(self.log_console, "btn_toggle_height"):
@@ -690,6 +707,7 @@ def setup_tab_console_layout(
         scroll_form.setWidgetResizable(True)
         scroll_form.setWidget(form_widget)
         scroll_form.setFrameShape(QScrollArea.NoFrame)
+        scroll_form.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         tab_widget.scroll_form = scroll_form
         content_pane = scroll_form
     else:
@@ -710,7 +728,8 @@ def setup_tab_console_layout(
     tab_widget.splitter_console = splitter
 
     # 4. Botón flotante / inferior para mostrar el panel cuando está oculto
-    btn_show_console = QPushButton("🖥️ Mostrar Comando FFmpeg y Terminal de Salida", tab_widget)
+    btn_show_console = QPushButton("Mostrar Comando FFmpeg y Terminal de Salida", tab_widget)
+    btn_show_console.setIcon(tab_widget.style().standardIcon(QStyle.SP_DesktopIcon))
     btn_show_console.setObjectName("btn_show_console")
     btn_show_console.setCursor(Qt.PointingHandCursor)
     btn_show_console.setFixedHeight(28)
