@@ -153,6 +153,7 @@ class TabCreateVideo(QWidget):
         setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
 
         # Conectar cambios de opciones a la vista previa del comando
+        self.edit_pattern.textChanged.connect(lambda _: self._update_command_preview())
         self.spin_fps.valueChanged.connect(lambda _: self._update_command_preview())
         self.combo_codec.currentIndexChanged.connect(lambda _: self._update_command_preview())
         self.audio_selector.file_selected.connect(lambda _: self._update_command_preview())
@@ -185,8 +186,11 @@ class TabCreateVideo(QWidget):
             if match:
                 num_digits = len(match.group(1))
                 prefix = sample_name[:match.start(1)]
+                first_num = int(match.group(1))
                 inferred_pattern = f"{prefix}%0{num_digits}d.{found_ext}"
                 self.edit_pattern.setText(inferred_pattern)
+                if first_num > 1:
+                    self.lbl_detected.setText(f"Imágenes encontradas: {count} (inicia en #{first_num})")
 
         self._update_output_suggestion()
 
@@ -249,13 +253,15 @@ class TabCreateVideo(QWidget):
         ext = ".mov" if codec_preset == "prores" else (".webm" if codec_preset == "vp9_lossless" else ".mp4")
         target_out = out_video if out_video else f"video_compilado{ext}"
 
+        start_number = ffmpeg_core.find_sequence_start_number(folder, pattern)
         cmd = ffmpeg_core.build_create_video_command(
             ffmpeg_path=ffmpeg_path or "ffmpeg",
             input_pattern=input_pattern_path,
             output_file=target_out,
             fps=fps,
             codec_preset=codec_preset,
-            audio_file=audio_file
+            audio_file=audio_file,
+            start_number=start_number
         )
         self.cmd_preview.set_command(cmd)
 
@@ -305,13 +311,15 @@ class TabCreateVideo(QWidget):
         codec_preset = self.combo_codec.currentData()
         audio_file = self.audio_selector.get_path() if self.audio_selector.get_path() else None
 
+        start_number = ffmpeg_core.find_sequence_start_number(folder, pattern)
         cmd = ffmpeg_core.build_create_video_command(
             ffmpeg_path=ffmpeg_path,
             input_pattern=input_pattern_path,
             output_file=out_video,
             fps=fps,
             codec_preset=codec_preset,
-            audio_file=audio_file
+            audio_file=audio_file,
+            start_number=start_number
         )
 
         self.output_actions.hide_output()

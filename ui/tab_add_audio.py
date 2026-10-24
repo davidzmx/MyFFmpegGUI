@@ -16,7 +16,8 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QIcon
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
-    QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle, QSlider
+    QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QStyle, QSlider,
+    QDoubleSpinBox
 )
 from ui.widgets import (
     FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
@@ -33,6 +34,7 @@ class TabAddAudio(QWidget):
         self.get_ffmpeg_paths = get_ffmpeg_paths_fn
         self.worker = None
         self.video_duration = 0.0
+        self.audio_duration = 0.0
         self.has_original_audio = False
 
         form_widget = QWidget()
@@ -111,11 +113,81 @@ class TabAddAudio(QWidget):
         self.combo_audio_codec.currentIndexChanged.connect(lambda _: self._update_command_preview())
         grid_opts.addWidget(self.combo_audio_codec, 1, 1)
 
+        # Fila 2: Entrada en el video (Desfase / Delay)
+        lbl_delay = QLabel("Entrada en el video:")
+        lbl_delay.setMinimumWidth(150)
+        grid_opts.addWidget(lbl_delay, 2, 0)
+
+        h_delay = QHBoxLayout()
+        h_delay.setSpacing(6)
+        self.spin_delay = QDoubleSpinBox()
+        self.spin_delay.setRange(0.0, 86400.0)
+        self.spin_delay.setDecimals(2)
+        self.spin_delay.setSingleStep(1.0)
+        self.spin_delay.setSuffix(" seg")
+        self.spin_delay.setValue(0.0)
+        self.spin_delay.setToolTip(
+            "Segundo de la línea de tiempo del video en el que empezará a sonar el audio.\n"
+            "0.0s = suena desde el inicio del video.\n"
+            "Ejemplo: 10.0s = el audio agregado entrará exactamente a los 10 segundos del video."
+        )
+        self.spin_delay.valueChanged.connect(self._on_timing_changed)
+
+        self.lbl_delay_fmt = QLabel("00:00:00.00")
+        self.lbl_delay_fmt.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: bold; min-width: 75px;")
+
+        btn_reset_delay = QPushButton("0.0s")
+        btn_reset_delay.setToolTip("Restablecer entrada al inicio del video (0s)")
+        btn_reset_delay.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 48px;")
+        btn_reset_delay.setFixedWidth(52)
+        btn_reset_delay.setFixedHeight(24)
+        btn_reset_delay.clicked.connect(lambda: self.spin_delay.setValue(0.0))
+
+        h_delay.addWidget(self.spin_delay, 1)
+        h_delay.addWidget(self.lbl_delay_fmt)
+        h_delay.addWidget(btn_reset_delay)
+        grid_opts.addLayout(h_delay, 2, 1)
+
+        # Fila 3: Punto de inicio en el audio (Offset / Saltar intro)
+        lbl_offset = QLabel("Inicio del archivo de audio:")
+        lbl_offset.setMinimumWidth(150)
+        grid_opts.addWidget(lbl_offset, 3, 0)
+
+        h_offset = QHBoxLayout()
+        h_offset.setSpacing(6)
+        self.spin_offset = QDoubleSpinBox()
+        self.spin_offset.setRange(0.0, 86400.0)
+        self.spin_offset.setDecimals(2)
+        self.spin_offset.setSingleStep(1.0)
+        self.spin_offset.setSuffix(" seg")
+        self.spin_offset.setValue(0.0)
+        self.spin_offset.setToolTip(
+            "Segundo del archivo de audio desde donde se iniciará la reproducción.\n"
+            "0.0s = reproduce desde el principio del archivo de audio.\n"
+            "Ejemplo: 15.0s = salta los primeros 15 segundos de la pista (evita intros o silencios)."
+        )
+        self.spin_offset.valueChanged.connect(self._on_timing_changed)
+
+        self.lbl_offset_fmt = QLabel("00:00:00.00")
+        self.lbl_offset_fmt.setStyleSheet("color: #c084fc; font-size: 11px; font-weight: bold; min-width: 75px;")
+
+        btn_reset_offset = QPushButton("0.0s")
+        btn_reset_offset.setToolTip("Restablecer al inicio del archivo de audio (0s)")
+        btn_reset_offset.setStyleSheet("padding: 2px 4px; font-size: 11px; font-weight: bold; min-width: 48px;")
+        btn_reset_offset.setFixedWidth(52)
+        btn_reset_offset.setFixedHeight(24)
+        btn_reset_offset.clicked.connect(lambda: self.spin_offset.setValue(0.0))
+
+        h_offset.addWidget(self.spin_offset, 1)
+        h_offset.addWidget(self.lbl_offset_fmt)
+        h_offset.addWidget(btn_reset_offset)
+        grid_opts.addLayout(h_offset, 3, 1)
+
         self.chk_shortest = QCheckBox("Ajustar al final del video (cortar audio sobrante)")
         self.chk_shortest.setChecked(True)
         self.chk_shortest.setToolTip("Si el audio dura más que el video, se corta automáticamente para evitar que el video se quede congelado al final.")
         self.chk_shortest.stateChanged.connect(lambda _: self._update_command_preview())
-        grid_opts.addWidget(self.chk_shortest, 2, 0, 1, 2)
+        grid_opts.addWidget(self.chk_shortest, 4, 0, 1, 2)
 
         layout_opts.addLayout(grid_opts)
 
@@ -307,7 +379,10 @@ class TabAddAudio(QWidget):
         form_layout.addStretch()
 
         # Configurar panel de consola y comando (ocultable / inferior o lateral)
-        setup_tab_console_layout(self, form_widget, "Comando FFmpeg a ejecutar:")
+        setup_tab_console_layout(
+            self, form_widget, "Comando FFmpeg a ejecutar:",
+            initial_bottom_sizes=[550, 180]
+        )
 
         # Inicializar estado visual de carpeta base
         self.update_base_dir_display()
@@ -337,6 +412,8 @@ class TabAddAudio(QWidget):
         _, ffprobe_path = self.get_ffmpeg_paths()
         info = ffmpeg_core.get_media_info(path, ffprobe_path)
         self.video_duration = info.get("duration", 0.0)
+        if hasattr(self, "spin_delay") and self.video_duration > 0:
+            self.spin_delay.setMaximum(max(1.0, self.video_duration))
 
         audio_codec = info.get("audio_codec", "")
         self.has_original_audio = bool(info.get("audio_streams")) or bool(audio_codec)
@@ -357,11 +434,16 @@ class TabAddAudio(QWidget):
 
         if not has_file:
             self.lbl_audio_info.setText("Duración: --:--:-- | Códec: No cargado | Frecuencia: -- Hz")
+            self.audio_duration = 0.0
             self._update_command_preview()
             return
 
         _, ffprobe_path = self.get_ffmpeg_paths()
         info = ffmpeg_core.get_media_info(path, ffprobe_path)
+        self.audio_duration = info.get("duration", 0.0)
+        if hasattr(self, "spin_offset") and self.audio_duration > 0:
+            self.spin_offset.setMaximum(max(1.0, self.audio_duration))
+
         acodec = info.get("audio_codec", "Desconocido").upper()
         sr = ""
         streams = info.get("audio_streams", [])
@@ -376,6 +458,15 @@ class TabAddAudio(QWidget):
     def _clear_audio(self):
         self.audio_selector.set_path("")
         self._on_audio_selected("")
+
+    def _on_timing_changed(self):
+        delay_val = self.spin_delay.value() if hasattr(self, "spin_delay") else 0.0
+        offset_val = self.spin_offset.value() if hasattr(self, "spin_offset") else 0.0
+        if hasattr(self, "lbl_delay_fmt"):
+            self.lbl_delay_fmt.setText(ffmpeg_core.format_seconds_to_time_str(delay_val))
+        if hasattr(self, "lbl_offset_fmt"):
+            self.lbl_offset_fmt.setText(ffmpeg_core.format_seconds_to_time_str(offset_val))
+        self._update_command_preview()
 
     def _on_vol_orig_changed(self, val: int):
         self.lbl_vol_orig_val.setText(f"{val}%")
@@ -461,6 +552,8 @@ class TabAddAudio(QWidget):
 
         vol_orig = (self.slider_vol_orig.value() / 100.0) if hasattr(self, "slider_vol_orig") else 1.0
         vol_added = (self.slider_vol_added.value() / 100.0) if hasattr(self, "slider_vol_added") else 1.0
+        delay_sec = self.spin_delay.value() if hasattr(self, "spin_delay") else 0.0
+        offset_sec = self.spin_offset.value() if hasattr(self, "spin_offset") else 0.0
 
         cmd = ffmpeg_core.build_add_audio_to_video_command(
             ffmpeg_path=ffmpeg_p,
@@ -472,7 +565,9 @@ class TabAddAudio(QWidget):
             shortest=shortest,
             has_original_audio=self.has_original_audio,
             volume_orig=vol_orig,
-            volume_added=vol_added
+            volume_added=vol_added,
+            audio_delay_sec=delay_sec,
+            audio_start_offset_sec=offset_sec
         )
         self.cmd_preview.set_command(ffmpeg_core.format_command_for_display(cmd))
 
@@ -515,6 +610,8 @@ class TabAddAudio(QWidget):
 
         vol_orig = (self.slider_vol_orig.value() / 100.0) if hasattr(self, "slider_vol_orig") else 1.0
         vol_added = (self.slider_vol_added.value() / 100.0) if hasattr(self, "slider_vol_added") else 1.0
+        delay_sec = self.spin_delay.value() if hasattr(self, "spin_delay") else 0.0
+        offset_sec = self.spin_offset.value() if hasattr(self, "spin_offset") else 0.0
 
         cmd = ffmpeg_core.build_add_audio_to_video_command(
             ffmpeg_path=ffmpeg_p,
@@ -526,7 +623,9 @@ class TabAddAudio(QWidget):
             shortest=shortest,
             has_original_audio=self.has_original_audio,
             volume_orig=vol_orig,
-            volume_added=vol_added
+            volume_added=vol_added,
+            audio_delay_sec=delay_sec,
+            audio_start_offset_sec=offset_sec
         )
 
         self.btn_run.setEnabled(False)

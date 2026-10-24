@@ -6,12 +6,13 @@ Widgets reutilizables con soporte de Drag & Drop y componentes visuales.
 
 import os
 from pathlib import Path
+from typing import List, Optional, Callable
 from PyQt5.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QLineEdit, QPushButton,
     QFileDialog, QLabel, QPlainTextEdit, QProgressBar, QApplication, QStyle,
-    QSplitter, QScrollArea
+    QSplitter, QScrollArea, QTabBar, QTabWidget
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QObject, QEvent
 
 
 import config_manager
@@ -245,6 +246,166 @@ class FolderSelector(QWidget):
         if path:
             self._on_dropped(path)
             event.acceptProposedAction()
+
+
+def extract_mime_paths(mime_data) -> List[str]:
+    """Extrae y limpia rutas locales de archivos o carpetas a partir de QMimeData."""
+    paths = []
+    if not mime_data:
+        return paths
+    if mime_data.hasUrls():
+        for url in mime_data.urls():
+            p = url.toLocalFile() or url.toString()
+            if p:
+                cleaned = config_manager.clean_file_path(p)
+                if cleaned and cleaned not in paths:
+                    paths.append(cleaned)
+    elif mime_data.hasText():
+        for line in mime_data.text().splitlines():
+            line = line.strip()
+            if line:
+                cleaned = config_manager.clean_file_path(line)
+                if cleaned and cleaned not in paths:
+                    paths.append(cleaned)
+    return paths
+
+
+class DragDropTabBar(QTabBar):
+    """
+    QTabBar con soporte interactivo para Drag & Drop:
+    - Al arrastrar un archivo sobre cualquier pestaña de la barra, activa automáticamente
+      dicha pestaña tras un breve hover (100 ms) para poder usar el archivo en ella.
+    - Si el usuario suelta (drop) el archivo directamente sobre la pestaña, se activa de
+      inmediato y emite la señal tab_files_dropped(int, list).
+    """
+    tab_files_dropped = pyqtSignal(int, list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+        self._pending_tab_index = -1
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.setInterval(100)
+        self._hover_timer.timeout.connect(self._activate_pending_tab)
+
+    def _activate_pending_tab(self):
+        if 0 <= self._pending_tab_index < self.count():
+            if self.currentIndex() != self._pending_tab_index:
+                self.setCurrentIndex(self._pending_tab_index)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+            idx = self.tabAt(event.pos())
+            if idx >= 0:
+                self._pending_tab_index = idx
+                self._hover_timer.start()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+            idx = self.tabAt(event.pos())
+            if idx >= 0:
+                if idx != self._pending_tab_index:
+                    self._pending_tab_index = idx
+                    self._hover_timer.start()
+            else:
+                self._hover_timer.stop()
+                self._pending_tab_index = -1
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._hover_timer.stop()
+        self._pending_tab_index = -1
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event):
+        self._hover_timer.stop()
+        idx = self.tabAt(event.pos())
+        if idx < 0:
+            idx = self.currentIndex()
+        if 0 <= idx < self.count():
+            self.setCurrentIndex(idx)
+            paths = extract_mime_paths(event.mimeData())
+            if paths:
+                self.tab_files_dropped.emit(idx, paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class DragDropTabWidget(QTabWidget):
+    """
+    QTabWidget con soporte integral de arrastrar y soltar archivos:
+    - Utiliza DragDropTabBar para activar pestañas durante el arrastre.
+    - Emite files_dropped_on_active_tab(int, list) cuando se sueltan archivos sobre las pestañas o su área.
+    """
+    files_dropped_on_active_tab = pyqtSignal(int, list)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.tab_bar = DragDropTabBar(self)
+        self.setTabBar(self.tab_bar)
+        self.setAcceptDrops(True)
+        self.tab_bar.tab_files_dropped.connect(self._on_tab_dropped)
+
+    def _on_tab_dropped(self, index: int, paths: list):
+        self.files_dropped_on_active_tab.emit(index, paths)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls() or event.mimeData().hasText():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        paths = extract_mime_paths(event.mimeData())
+        if paths:
+            idx = self.currentIndex()
+            self.files_dropped_on_active_tab.emit(idx, paths)
+            event.acceptProposedAction()
+        else:
+            super().dropEvent(event)
+
+
+class TabDropFilter(QObject):
+    """
+    Filtro de eventos para permitir soltar archivos en cualquier parte del cuerpo de una pestaña
+    (fondos, paneles, etiquetas), dirigiendo el archivo automáticamente al selector correspondiente.
+    """
+    def __init__(self, tab_index_getter: Callable[[], int], on_drop_callback: Callable[[int, List[str]], None]):
+        super().__init__()
+        self.tab_index_getter = tab_index_getter
+        self.on_drop_callback = on_drop_callback
+
+    def eventFilter(self, obj, event):
+        # No interferir con DropLineEdit ni listas que gestionan su propio drop
+        if isinstance(obj, DropLineEdit) or getattr(obj, "_has_custom_drop", False):
+            return False
+
+        if event.type() in (QEvent.DragEnter, QEvent.DragMove):
+            if event.mimeData().hasUrls() or event.mimeData().hasText():
+                event.acceptProposedAction()
+                return True
+        elif event.type() == QEvent.Drop:
+            if event.mimeData().hasUrls() or event.mimeData().hasText():
+                paths = extract_mime_paths(event.mimeData())
+                if paths:
+                    idx = self.tab_index_getter()
+                    self.on_drop_callback(idx, paths)
+                    event.acceptProposedAction()
+                    return True
+        return False
 
 
 class LogConsole(QWidget):

@@ -6,6 +6,7 @@ Suite Multimedia Sin Pérdida con soporte para Video a Audio (MP3/WAV), Conversi
 Fotogramas, Segmentación, Fusión y Carpeta Base configurable.
 """
 
+import os
 import sys
 from pathlib import Path
 from PyQt5.QtWidgets import (
@@ -17,6 +18,7 @@ from PyQt5.QtCore import Qt
 
 import ffmpeg_core
 import config_manager
+from ui.widgets import DragDropTabWidget, TabDropFilter, extract_mime_paths, DropLineEdit
 from ui.tab_audio import TabAudio
 from ui.tab_convert_video import TabConvertVideo
 from ui.tab_extract_frames import TabExtractFrames
@@ -96,10 +98,11 @@ class MainWindow(QMainWindow):
 
         main_layout.addLayout(header_layout)
 
-        # Tabs / Pestañas
-        self.tabs = QTabWidget(self)
+        # Tabs / Pestañas con soporte para Drag & Drop y autoactivación al arrastrar
+        self.tabs = DragDropTabWidget(self)
         self.tabs.setUsesScrollButtons(True)
         self.tabs.setElideMode(Qt.ElideNone)
+        self.tabs.files_dropped_on_active_tab.connect(self.load_files_into_tab)
         self.tab_settings = TabSettings(self, self)
 
         # Instanciar cada una de las pestañas
@@ -122,6 +125,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_concat, "Unir Segmentos")
         self.tabs.addTab(self.tab_compare, "Comparar Videos")
         self.tabs.addTab(self.tab_settings, "Ajustes")
+
+        # Habilitar captura de archivos arrastrados en el cuerpo de cada pestaña
+        self._tab_filters = []
+        for i in range(self.tabs.count()):
+            self._install_tab_drop_filter(i, self.tabs.widget(i))
 
         # Mapa de nombres de pestañas para invocación desde CLI y menú contextual
         self.tab_map = {
@@ -147,6 +155,88 @@ class MainWindow(QMainWindow):
         # Cargar archivo y pestaña inicial si fueron invocados desde el menú contextual / CLI
         if initial_file or initial_tab:
             self.load_target(initial_tab, initial_file)
+
+    def _install_tab_drop_filter(self, tab_index: int, widget: QWidget):
+        """Instala recursivamente el filtro de arrastrar y soltar en la superficie de la pestaña."""
+        if not widget:
+            return
+        filt = TabDropFilter(lambda: tab_index, self.load_files_into_tab)
+        self._tab_filters.append(filt)
+
+        def _enable(w):
+            if isinstance(w, DropLineEdit) or getattr(w, "_has_custom_drop", False):
+                return
+            w.setAcceptDrops(True)
+            w.installEventFilter(filt)
+            for child in w.findChildren(QWidget):
+                if not isinstance(child, DropLineEdit) and not getattr(child, "_has_custom_drop", False):
+                    child.setAcceptDrops(True)
+                    child.installEventFilter(filt)
+
+        _enable(widget)
+
+    def load_files_into_tab(self, tab_index: int, paths: list):
+        """Carga uno o más archivos en la pestaña especificada y la activa si no lo estaba."""
+        if not paths or tab_index < 0 or tab_index >= self.tabs.count():
+            return
+
+        self.tabs.setCurrentIndex(tab_index)
+        tab_widget = self.tabs.widget(tab_index)
+        first_path = paths[0]
+        audio_exts = (".mp3", ".wav", ".aac", ".flac", ".m4a", ".ogg", ".opus", ".wma")
+
+        if tab_widget == self.tab_audio:
+            self.tab_audio.input_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_convert:
+            self.tab_convert.input_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_add_audio:
+            videos = [p for p in paths if os.path.splitext(p)[1].lower() not in audio_exts]
+            audios = [p for p in paths if os.path.splitext(p)[1].lower() in audio_exts]
+            if videos and audios:
+                self.tab_add_audio.video_selector.set_path(videos[0])
+                self.tab_add_audio.audio_selector.set_path(audios[0])
+            elif audios and not videos:
+                if self.tab_add_audio.video_selector.get_path():
+                    self.tab_add_audio.audio_selector.set_path(audios[0])
+                else:
+                    self.tab_add_audio.audio_selector.set_path(audios[0])
+            elif videos:
+                self.tab_add_audio.video_selector.set_path(videos[0])
+            else:
+                self.tab_add_audio.video_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_extract:
+            self.tab_extract.input_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_create:
+            if os.path.isdir(first_path) or not os.path.splitext(first_path)[1]:
+                self.tab_create.folder_selector.set_path(first_path)
+            else:
+                ext = os.path.splitext(first_path)[1].lower()
+                if ext in audio_exts:
+                    self.tab_create.audio_selector.set_path(first_path)
+                else:
+                    self.tab_create.folder_selector.set_path(os.path.dirname(first_path))
+
+        elif tab_widget == self.tab_segment:
+            self.tab_segment.input_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_concat:
+            self.tab_concat._insert_paths(paths)
+
+        elif tab_widget == self.tab_compare:
+            if len(paths) >= 2:
+                self.tab_compare.input_a.set_path(paths[0])
+                self.tab_compare.input_b.set_path(paths[1])
+            else:
+                if not self.tab_compare.input_a.get_path():
+                    self.tab_compare.input_a.set_path(first_path)
+                elif not self.tab_compare.input_b.get_path():
+                    self.tab_compare.input_b.set_path(first_path)
+                else:
+                    self.tab_compare.input_a.set_path(first_path)
 
     def load_target(self, tab_name: str = None, file_path: str = None):
         """Carga un archivo y activa la pestaña correspondiente solicitada por CLI o menú contextual."""
@@ -174,11 +264,8 @@ class MainWindow(QMainWindow):
         if tab_name and tab_name in self.tab_map:
             idx, tab_widget = self.tab_map[tab_name]
             self.tabs.setCurrentIndex(idx)
-            if file_path and os.path.isfile(file_path):
-                if hasattr(tab_widget, "input_selector"):
-                    tab_widget.input_selector.set_path(file_path)
-                elif hasattr(tab_widget, "input_a"):
-                    tab_widget.input_a.set_path(file_path)
+            if file_path and os.path.exists(file_path):
+                self.load_files_into_tab(idx, [file_path])
 
     def _wrap_tab(self, widget: QWidget) -> QScrollArea:
         scroll = QScrollArea()

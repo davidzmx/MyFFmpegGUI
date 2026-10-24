@@ -977,6 +977,21 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(res3.returncode, 0, f"Error en add_track audio: {res3.stderr.decode()}")
         self.assertTrue(os.path.isfile(out_add_track))
 
+        # 3b. Probar comando con retraso en el video (adelay) y punto de inicio del audio (-ss)
+        out_timed = os.path.join(self.tmp_path, "out_timed.mp4")
+        cmd_timed = ffmpeg_core.build_add_audio_to_video_command(
+            self.ffmpeg_path, self.test_video, audio_file, out_timed,
+            audio_mode="mix", audio_codec="aac", shortest=True,
+            audio_delay_sec=1.5, audio_start_offset_sec=0.5
+        )
+        cmd_timed_str = " ".join(cmd_timed)
+        self.assertIn("adelay=1500:all=1", cmd_timed_str)
+        self.assertIn("-ss", cmd_timed)
+        self.assertIn("0.500", cmd_timed)
+        res_timed = subprocess.run(cmd_timed, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(res_timed.returncode, 0, f"Error en timed audio: {res_timed.stderr.decode()}")
+        self.assertTrue(os.path.isfile(out_timed))
+
         # 4. Probar TabAddAudio en MainWindow
         win = MainWindow()
         self.assertTrue(hasattr(win, "tab_add_audio"))
@@ -989,6 +1004,17 @@ class TestFFmpegSuite(unittest.TestCase):
 
         tab.audio_selector.set_path(audio_file)
         self.assertTrue(tab.btn_clear_audio.isEnabled())
+
+        # Probar controles de sincronización y desfase de tiempo
+        self.assertTrue(hasattr(tab, "spin_delay"))
+        self.assertTrue(hasattr(tab, "spin_offset"))
+        tab.spin_delay.setValue(1.25)
+        tab.spin_offset.setValue(0.75)
+        self.assertEqual(tab.lbl_delay_fmt.text(), "00:00:01.25")
+        self.assertEqual(tab.lbl_offset_fmt.text(), "00:00:00.75")
+        preview_timed = tab.cmd_preview.get_command()
+        self.assertIn("adelay=1250:all=1", preview_timed)
+        self.assertIn("-ss", preview_timed)
 
         # Probar cambio de modo
         tab.combo_audio_mode.setCurrentIndex(1)  # mix
@@ -1288,8 +1314,120 @@ class TestFFmpegSuite(unittest.TestCase):
 
         win.close()
 
+    def test_24_segment_exact_10s_on_assembled_video_with_missing_first_frame(self):
+        frames_dir = os.path.join(self.tmp_path, "frames_seq")
+        os.makedirs(frames_dir, exist_ok=True)
+
+        # Generar 660 fotogramas sintéticos (22 segundos a 30 fps)
+        pattern = os.path.join(frames_dir, "frame_%06d.png")
+        subprocess.run([
+            self.ffmpeg_path, "-y",
+            "-f", "lavfi", "-i", "testsrc=duration=22:size=160x120:rate=30",
+            pattern
+        ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        # Simular caso de uso: usuario elimina el primer fotograma (frame_000001.png)
+        first_frame = os.path.join(frames_dir, "frame_000001.png")
+        self.assertTrue(os.path.isfile(first_frame))
+        os.remove(first_frame)
+        self.assertFalse(os.path.isfile(first_frame))
+
+        # Detectar número inicial automáticamente (debe ser 2)
+        start_num = ffmpeg_core.find_sequence_start_number(frames_dir, "frame_%06d.png")
+        self.assertEqual(start_num, 2)
+
+        # Crear video a partir de la secuencia comenzando en fotograma 2
+        assembled_video = os.path.join(self.tmp_path, "assembled.mp4")
+        cmd_create = ffmpeg_core.build_create_video_command(
+            self.ffmpeg_path,
+            input_pattern=pattern,
+            output_file=assembled_video,
+            fps=30.0,
+            codec_preset="h264_visually_lossless",
+            start_number=start_num
+        )
+        self.assertIn("-start_number", cmd_create)
+        self.assertIn("-g", cmd_create)
+        subprocess.run(cmd_create, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.assertTrue(os.path.isfile(assembled_video))
+
+        # Segmentar a 10 segundos en modo exacto
+        seg_dir = os.path.join(self.tmp_path, "segs_10s")
+        os.makedirs(seg_dir, exist_ok=True)
+        seg_pattern = os.path.join(seg_dir, "seg_%03d.mp4")
+        cmd_seg = ffmpeg_core.build_segment_command(
+            self.ffmpeg_path,
+            input_file=assembled_video,
+            output_pattern=seg_pattern,
+            segment_duration_sec=10,
+            mode="exact"
+        )
+        self.assertIn("-segment_time_delta", cmd_seg)
+        subprocess.run(cmd_seg, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+        segs = sorted([os.path.join(seg_dir, f) for f in os.listdir(seg_dir) if f.endswith(".mp4")])
+        self.assertGreaterEqual(len(segs), 2)
+
+        # El primer segmento debe medir exactamente 10 segundos (no 18 segundos)
+        info_first = ffmpeg_core.get_media_info(segs[0], self.ffprobe_path)
+        self.assertAlmostEqual(info_first["duration"], 10.0, delta=0.15)
+
+    def test_25_tab_drag_hover_activation_and_drop(self):
+        from PyQt5.QtCore import QPoint, Qt, QMimeData, QUrl
+        from PyQt5.QtGui import QDragEnterEvent, QDropEvent
+
+        win = MainWindow()
+        win.show()
+
+        # Iniciar en pestaña 0
+        win.tabs.setCurrentIndex(0)
+        self.assertEqual(win.tabs.currentIndex(), 0)
+
+        # 1. Simular arrastrar sobre pestaña 5 ('Segmentar Video')
+        bar = win.tabs.tab_bar
+        rect_tab5 = bar.tabRect(5)
+        pos5 = rect_tab5.center()
+
+        test_file = os.path.join(self.tmp_path, "drag_test.mp4")
+        with open(test_file, "w") as f:
+            f.write("test")
+
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(test_file)])
+
+        ev_enter = QDragEnterEvent(pos5, Qt.CopyAction, mime, Qt.NoButton, Qt.NoModifier)
+        bar.dragEnterEvent(ev_enter)
+        self.assertTrue(ev_enter.isAccepted())
+        self.assertEqual(bar._pending_tab_index, 5)
+
+        # Activar hover
+        bar._activate_pending_tab()
+        self.assertEqual(win.tabs.currentIndex(), 5)
+
+        # 2. Soltar (drop) en la cabecera de la pestaña 5
+        ev_drop = QDropEvent(pos5, Qt.CopyAction, mime, Qt.NoButton, Qt.NoModifier)
+        bar.dropEvent(ev_drop)
+        self.assertTrue(ev_drop.isAccepted())
+        self.assertEqual(
+            os.path.normpath(win.tab_segment.input_selector.get_path()),
+            os.path.normpath(test_file)
+        )
+
+        # 3. Soltar en cabecera de pestaña 1 ('Convertir Video')
+        rect_tab1 = bar.tabRect(1)
+        ev_drop1 = QDropEvent(rect_tab1.center(), Qt.CopyAction, mime, Qt.NoButton, Qt.NoModifier)
+        bar.dropEvent(ev_drop1)
+        self.assertEqual(win.tabs.currentIndex(), 1)
+        self.assertEqual(
+            os.path.normpath(win.tab_convert.input_selector.get_path()),
+            os.path.normpath(test_file)
+        )
+
+        win.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

@@ -293,6 +293,25 @@ def format_volume_filter(val: float) -> str:
     return f"{v:.2f}".rstrip('0')
 
 
+def format_seconds_to_time_str(sec: float) -> str:
+    """Formatea segundos en formato HH:MM:SS.cs para visualización de tiempos precisos."""
+    total_sec = max(0.0, float(sec))
+    hours = int(total_sec // 3600)
+    minutes = int((total_sec % 3600) // 60)
+    seconds = int(total_sec % 60)
+    centiseconds = int(round((total_sec - int(total_sec)) * 100))
+    if centiseconds >= 100:
+        centiseconds = 0
+        seconds += 1
+        if seconds >= 60:
+            seconds = 0
+            minutes += 1
+            if minutes >= 60:
+                minutes = 0
+                hours += 1
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
+
+
 def build_add_audio_to_video_command(
     ffmpeg_path: str,
     video_file: str,
@@ -303,7 +322,9 @@ def build_add_audio_to_video_command(
     shortest: bool = True,
     has_original_audio: bool = True,
     volume_orig: float = 1.0,
-    volume_added: float = 1.0
+    volume_added: float = 1.0,
+    audio_delay_sec: float = 0.0,
+    audio_start_offset_sec: float = 0.0
 ) -> List[str]:
     """
     Construye el comando FFmpeg para incorporar, reemplazar o mezclar audio en un video.
@@ -314,55 +335,89 @@ def build_add_audio_to_video_command(
     - shortest: Corta el audio si es más largo que el video para evitar fotogramas congelados.
     - volume_orig: Multiplicador de volumen del audio original (1.0 = 100%).
     - volume_added: Multiplicador de volumen del audio agregado (1.0 = 100%).
+    - audio_delay_sec: Segundo del video en el que empieza a sonar el audio (adelay).
+    - audio_start_offset_sec: Segundo del archivo de audio desde el que se empieza a reproducir (-ss).
     """
     cmd = [
         ffmpeg_path, "-y",
-        "-i", video_file,
-        "-i", audio_file
+        "-i", video_file
     ]
+
+    # Punto de inicio en el archivo de audio (salta la intro / adelanto)
+    if audio_start_offset_sec and audio_start_offset_sec > 0.001:
+        cmd.extend(["-ss", f"{audio_start_offset_sec:.3f}"])
+
+    cmd.extend(["-i", audio_file])
 
     # Video stream siempre en copia directa (sin pérdida y ultrarrápido)
     cmd.extend(["-c:v", "copy"])
+
+    has_filter = False
+    delay_ms = int(round(audio_delay_sec * 1000)) if (audio_delay_sec and audio_delay_sec > 0.001) else 0
+
+    if audio_mode == "mix" and has_original_audio:
+        has_filter = True
+        vo_str = format_volume_filter(volume_orig)
+        va_str = format_volume_filter(volume_added)
+        if delay_ms > 0:
+            filter_str = (
+                f"[0:a]volume={vo_str}[a0];"
+                f"[1:a]adelay={delay_ms}:all=1,volume={va_str}[a1];"
+                f"[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            )
+        else:
+            filter_str = (
+                f"[0:a]volume={vo_str}[a0];"
+                f"[1:a]volume={va_str}[a1];"
+                f"[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]"
+            )
+        cmd.extend([
+            "-filter_complex", filter_str,
+            "-map", "0:v:0",
+            "-map", "[aout]"
+        ])
+    elif audio_mode == "add_track":
+        if delay_ms > 0:
+            has_filter = True
+            cmd.extend([
+                "-filter_complex", f"[1:a]adelay={delay_ms}:all=1[a1]",
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-map", "[a1]"
+            ])
+        else:
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "0:a?",
+                "-map", "1:a:0"
+            ])
+    else:
+        # "replace" (o "mix" si el video original no contenía audio)
+        if delay_ms > 0:
+            has_filter = True
+            cmd.extend([
+                "-filter_complex", f"[1:a]adelay={delay_ms}:all=1[aout]",
+                "-map", "0:v:0",
+                "-map", "[aout]"
+            ])
+        else:
+            cmd.extend([
+                "-map", "0:v:0",
+                "-map", "1:a:0"
+            ])
 
     # Determinar parámetros de codificación de audio
     if audio_codec == "mp3":
         a_codec_args = ["-c:a", "libmp3lame", "-b:a", "320k"]
     elif audio_codec == "flac":
         a_codec_args = ["-c:a", "flac"]
-    elif audio_codec == "copy" and audio_mode != "mix":
+    elif audio_codec == "copy" and not has_filter:
         a_codec_args = ["-c:a", "copy"]
     else:
-        # Predeterminado: AAC 256k (estándar universal de alta fidelidad)
+        # Predeterminado o forzado por filtro (adelay o amix): AAC 256k
         a_codec_args = ["-c:a", "aac", "-b:a", "256k"]
 
-    if audio_mode == "mix" and has_original_audio:
-        # Mezclar requiere recodificar audio con amix y soporte para volumen individual
-        vo_str = format_volume_filter(volume_orig)
-        va_str = format_volume_filter(volume_added)
-        cmd.extend([
-            "-filter_complex", f"[0:a]volume={vo_str}[a0];[1:a]volume={va_str}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[aout]",
-            "-map", "0:v:0",
-            "-map", "[aout]"
-        ])
-        if audio_codec == "copy":
-            cmd.extend(["-c:a", "aac", "-b:a", "256k"])
-        else:
-            cmd.extend(a_codec_args)
-    elif audio_mode == "add_track":
-        # Conservar audio original y añadir el nuevo como segunda pista
-        cmd.extend([
-            "-map", "0:v:0",
-            "-map", "0:a?",
-            "-map", "1:a:0"
-        ])
-        cmd.extend(a_codec_args)
-    else:
-        # "replace" (o "mix" si el video original no contenía audio)
-        cmd.extend([
-            "-map", "0:v:0",
-            "-map", "1:a:0"
-        ])
-        cmd.extend(a_codec_args)
+    cmd.extend(a_codec_args)
 
     if shortest:
         cmd.append("-shortest")
@@ -540,37 +595,72 @@ def build_extract_frames_command(
     return cmd
 
 
+def find_sequence_start_number(folder: str, pattern: str) -> Optional[int]:
+    """
+    Detecta el número inicial de una secuencia de imágenes (ej. frame_%06d.png)
+    en una carpeta, especialmente útil si se han eliminado fotogramas iniciales.
+    """
+    if not folder or not os.path.isdir(folder) or not pattern:
+        return None
+    try:
+        parts = re.split(r"(%0?\d*d)", pattern)
+        if len(parts) == 3:
+            prefix = re.escape(parts[0])
+            suffix = re.escape(parts[2])
+            regex = re.compile(rf"^{prefix}(\d+){suffix}$", re.IGNORECASE)
+        else:
+            regex_pattern = re.sub(r"%0?\d*d", r"(\d+)", pattern)
+            regex = re.compile(rf"^{regex_pattern}$", re.IGNORECASE)
+
+        min_num = None
+        for filename in os.listdir(folder):
+            m = regex.match(filename)
+            if m:
+                val = int(m.group(1))
+                if min_num is None or val < min_num:
+                    min_num = val
+        return min_num
+    except Exception:
+        return None
+
+
 def build_create_video_command(
     ffmpeg_path: str,
     input_pattern: str,
     output_file: str,
     fps: float = 30.0,
     codec_preset: str = "h264_lossless",  # "h264_lossless", "h264_visually_lossless", "prores", "vp9_lossless"
-    audio_file: Optional[str] = None
+    audio_file: Optional[str] = None,
+    start_number: Optional[int] = None
 ) -> List[str]:
     """
     Construye el comando para ensamblar un video a partir de fotogramas secuenciales.
     """
-    cmd = [ffmpeg_path, "-y", "-framerate", str(fps), "-i", input_pattern]
+    cmd = [ffmpeg_path, "-y", "-framerate", str(fps)]
+    if start_number is not None and start_number >= 0:
+        cmd.extend(["-start_number", str(start_number)])
+    cmd.extend(["-i", input_pattern])
 
     if audio_file and os.path.isfile(audio_file):
         cmd.extend(["-i", audio_file])
 
+    gop_size = max(1, int(round(fps * 2)))  # Keyframe cada 2 segundos para edición y segmentación óptima
+
     if codec_preset == "h264_lossless":
         # H.264 CRF 0 es matemáticamente sin pérdida
         # yuv420p permite reproducirlo en reproductores habituales sin distorsión visible
-        cmd.extend(["-c:v", "libx264", "-crf", "0", "-preset", "slow", "-pix_fmt", "yuv420p"])
+        cmd.extend(["-c:v", "libx264", "-crf", "0", "-preset", "slow", "-g", str(gop_size), "-pix_fmt", "yuv420p"])
     elif codec_preset == "h264_visually_lossless":
         # CRF 17 es imperceptiblemente idéntico a la fuente original y altamente compatible
-        cmd.extend(["-c:v", "libx264", "-crf", "17", "-preset", "slow", "-pix_fmt", "yuv420p"])
+        cmd.extend(["-c:v", "libx264", "-crf", "17", "-preset", "slow", "-g", str(gop_size), "-pix_fmt", "yuv420p"])
     elif codec_preset == "prores":
         # Apple ProRes 422 HQ (estándar de edición profesional sin pérdida perceptual)
         cmd.extend(["-c:v", "prores_ks", "-profile:v", "3", "-pix_fmt", "yuv422p10le"])
     elif codec_preset == "vp9_lossless":
         # WebM / VP9 Lossless
-        cmd.extend(["-c:v", "libvpx-vp9", "-lossless", "1", "-pix_fmt", "yuv420p"])
+        cmd.extend(["-c:v", "libvpx-vp9", "-lossless", "1", "-g", str(gop_size), "-pix_fmt", "yuv420p"])
     else:
-        cmd.extend(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"])
+        cmd.extend(["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-g", str(gop_size), "-pix_fmt", "yuv420p"])
 
     if audio_file and os.path.isfile(audio_file):
         cmd.extend(["-c:a", "copy", "-shortest"])
@@ -600,6 +690,7 @@ def build_segment_command(
             "-map", "0",
             "-f", "segment",
             "-segment_time", str(segment_duration_sec),
+            "-segment_time_delta", "0.5",
             "-reset_timestamps", "1"
         ])
     else:
@@ -615,6 +706,7 @@ def build_segment_command(
             "-map", "0",
             "-f", "segment",
             "-segment_time", str(segment_duration_sec),
+            "-segment_time_delta", "0.1",
             "-reset_timestamps", "1"
         ])
 
@@ -696,7 +788,7 @@ def build_concat_command(
             # Filtros de video
             v_parts = ["[0:v]setpts=PTS-STARTPTS[v0]"]
             for i in range(1, k):
-                v_parts.append(f"[{i}:v]select=gte(n\,{n_drop}),setpts=PTS-STARTPTS[v{i}]")
+                v_parts.append(f"[{i}:v]select=gte(n\\,{n_drop}),setpts=PTS-STARTPTS[v{i}]")
             v_cat = "".join(f"[v{i}]" for i in range(k)) + f"concat=n={k}:v=1:a=0[vout]"
 
             if not has_audio:

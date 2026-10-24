@@ -30,6 +30,7 @@ class SegmentListWidget(QListWidget):
         self.on_files_dropped = on_files_dropped
         self.setAcceptDrops(True)
         self.setDragDropMode(QListWidget.InternalMove)
+        self._has_custom_drop = True
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
