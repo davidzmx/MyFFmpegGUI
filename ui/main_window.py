@@ -27,6 +27,7 @@ from ui.tab_segment import TabSegment
 from ui.tab_concat import TabConcat
 from ui.tab_compare import TabCompare
 from ui.tab_add_audio import TabAddAudio
+from ui.tab_voice_isolation import TabVoiceIsolation
 from ui.tab_settings import TabSettings
 
 
@@ -107,6 +108,7 @@ class MainWindow(QMainWindow):
 
         # Instanciar cada una de las pestañas
         self.tab_audio = TabAudio(self.get_active_ffmpeg_paths, self)
+        self.tab_voice = TabVoiceIsolation(self.get_active_ffmpeg_paths, self)
         self.tab_add_audio = TabAddAudio(self.get_active_ffmpeg_paths, self)
         self.tab_convert = TabConvertVideo(self.get_active_ffmpeg_paths, self)
         self.tab_extract = TabExtractFrames(self.get_active_ffmpeg_paths, self)
@@ -123,6 +125,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tab_create, "Crear Video")
         self.tabs.addTab(self.tab_segment, "Segmentar Video")
         self.tabs.addTab(self.tab_concat, "Unir Segmentos")
+        self.tabs.addTab(self.tab_voice, "Aislar Voces")
         self.tabs.addTab(self.tab_compare, "Comparar Videos")
         self.tabs.addTab(self.tab_settings, "Ajustes")
 
@@ -140,8 +143,9 @@ class MainWindow(QMainWindow):
             "create": (4, self.tab_create),
             "segment": (5, self.tab_segment),
             "concat": (6, self.tab_concat),
-            "compare": (7, self.tab_compare),
-            "settings": (8, self.tab_settings),
+            "voice": (7, self.tab_voice),
+            "compare": (8, self.tab_compare),
+            "settings": (9, self.tab_settings),
         }
 
         # Forzar activación inmediata de layout al cambiar de pestaña
@@ -187,6 +191,9 @@ class MainWindow(QMainWindow):
 
         if tab_widget == self.tab_audio:
             self.tab_audio.input_selector.set_path(first_path)
+
+        elif tab_widget == self.tab_voice:
+            self.tab_voice.input_selector.set_path(first_path)
 
         elif tab_widget == self.tab_convert:
             self.tab_convert.input_selector.set_path(first_path)
@@ -292,7 +299,7 @@ class MainWindow(QMainWindow):
 
     def _on_config_saved(self):
         """Actualiza la visualización de la Carpeta Base y paneles de consola en todas las pestañas."""
-        for tab in (self.tab_audio, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat, self.tab_compare):
+        for tab in (self.tab_audio, self.tab_voice, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat, self.tab_compare):
             if hasattr(tab, "update_base_dir_display"):
                 tab.update_base_dir_display()
             if hasattr(tab, "apply_console_panel_settings"):
@@ -304,7 +311,7 @@ class MainWindow(QMainWindow):
             config_manager.set_console_panel_position(pos)
         if visible is not None:
             config_manager.set_console_panel_visible(visible)
-        for tab in (self.tab_audio, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat):
+        for tab in (self.tab_audio, self.tab_voice, self.tab_add_audio, self.tab_convert, self.tab_extract, self.tab_create, self.tab_segment, self.tab_concat):
             if hasattr(tab, "apply_console_panel_settings"):
                 tab.apply_console_panel_settings(pos=pos, visible=visible)
 
@@ -325,6 +332,7 @@ class MainWindow(QMainWindow):
         """Asegura la cancelación y terminación limpia de todos los subprocesos y trabajadores al cerrar."""
         tabs_to_clean = (
             getattr(self, "tab_audio", None),
+            getattr(self, "tab_voice", None),
             getattr(self, "tab_add_audio", None),
             getattr(self, "tab_convert", None),
             getattr(self, "tab_extract", None),

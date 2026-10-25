@@ -233,8 +233,8 @@ class TestFFmpegSuite(unittest.TestCase):
         from ui.main_window import MainWindow
         win = MainWindow()
         self.assertIsNotNone(win)
-        # 9 pestañas completas (incluye Poner Audio a Video)
-        self.assertEqual(win.tabs.count(), 9)
+        # 10 pestañas completas (incluye Aislar Voces)
+        self.assertEqual(win.tabs.count(), 10)
         win.close()
 
     def test_10_command_preview_and_base_folder_visibility(self):
@@ -736,7 +736,7 @@ class TestFFmpegSuite(unittest.TestCase):
 
         # 6. Probar integración en MainWindow y TabCompare
         win = MainWindow(initial_tab="compare")
-        self.assertEqual(win.tabs.count(), 9)
+        self.assertEqual(win.tabs.count(), 10)
         compare_tab = win.tab_compare
 
         # Cargar videos en la interfaz
@@ -1422,6 +1422,103 @@ class TestFFmpegSuite(unittest.TestCase):
             os.path.normpath(win.tab_convert.input_selector.get_path()),
             os.path.normpath(test_file)
         )
+
+        win.close()
+
+    def test_26_voice_isolation_and_diarization(self):
+        """Verifica la lógica de comandos FFmpeg de aislamiento vocal, ensamblado de muestras y diarización tímbrica."""
+        import numpy as np
+        import diarization_core
+        from ui.main_window import MainWindow
+
+        # 1. Comandos de aislamiento vocal en ffmpeg_core
+        cmd_clean = ffmpeg_core.build_voice_isolation_command(
+            ffmpeg_path="ffmpeg",
+            input_file="interview.mp4",
+            output_file="interview_clean.wav",
+            profile="studio",
+            normalize_speech=True,
+            remove_silence=True,
+            audio_format="wav_24"
+        )
+        cmd_str = " ".join(cmd_clean)
+        self.assertIn("-vn", cmd_str)
+        self.assertIn("afftdn", cmd_str)
+        self.assertIn("speechnorm", cmd_str)
+        self.assertIn("silenceremove", cmd_str)
+        self.assertIn("pcm_s24le", cmd_str)
+
+        # 2. Comando de extracción mono 16kHz
+        cmd_mono = ffmpeg_core.build_extract_mono_wav_command("ffmpeg", "test.mp4", "mono.wav")
+        self.assertIn("-ar 16000", " ".join(cmd_mono))
+        self.assertIn("-ac 1", " ".join(cmd_mono))
+
+        # 3. Detección de silencios y parseo de segmentos de voz
+        mock_silence_log = """
+        [Parsed_silencedetect_1 @ 0x123] silence_start: 2.500
+        [Parsed_silencedetect_1 @ 0x123] silence_end: 4.000 | silence_duration: 1.500
+        [Parsed_silencedetect_1 @ 0x123] silence_start: 7.200
+        [Parsed_silencedetect_1 @ 0x123] silence_end: 8.500 | silence_duration: 1.300
+        """
+        speech_segs = ffmpeg_core.parse_silence_detect_output(mock_silence_log, total_duration=10.0)
+        self.assertEqual(len(speech_segs), 3)
+        self.assertEqual(speech_segs[0], (0.0, 2.5))
+        self.assertEqual(speech_segs[1], (4.0, 7.2))
+        self.assertEqual(speech_segs[2], (8.5, 10.0))
+
+        # 4. Ensamble de segmentos con atrim y concat
+        cmd_stitch = ffmpeg_core.build_stitch_segments_command(
+            ffmpeg_path="ffmpeg",
+            input_file="input.mp4",
+            segments=[(1.0, 4.0), (6.0, 9.5)],
+            output_file="speaker_sample.wav",
+            apply_cleanup=True
+        )
+        stitch_str = " ".join(cmd_stitch)
+        self.assertIn("atrim=start=1.000:end=4.000", stitch_str)
+        self.assertIn("atrim=start=6.000:end=9.500", stitch_str)
+        self.assertIn("concat=n=2:v=0:a=1", stitch_str)
+
+        # 5. Motor de diarización acústica con Scipy / NumPy
+        sr = 16000
+        t = np.linspace(0, 1.0, sr)
+        # Generar audio sintético con 2 personas (Hombre: ~130Hz, Mujer: ~240Hz)
+        sig_male = (0.6 * np.sin(2 * np.pi * 130 * t)).astype(np.float32)
+        sig_female = (0.6 * np.sin(2 * np.pi * 240 * t)).astype(np.float32)
+
+        feat_m = diarization_core.compute_acoustic_features(sig_male, sr)
+        feat_f = diarization_core.compute_acoustic_features(sig_female, sr)
+        self.assertEqual(feat_m.shape, (29,))
+        self.assertEqual(feat_f.shape, (29,))
+
+        # Crear archivo temporal WAV con turnos alternados
+        test_wav = os.path.join(self.tmp_path, "synthetic_dialog.wav")
+        combined_audio = np.concatenate([sig_male, sig_female, sig_male, sig_female])
+        combined_int16 = (combined_audio * 32767).astype(np.int16)
+        import scipy.io.wavfile as wavfile
+        wavfile.write(test_wav, sr, combined_int16)
+
+        test_segments = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]
+        diar_res = diarization_core.perform_speaker_diarization(test_wav, test_segments, num_speakers=2)
+        self.assertEqual(diar_res["num_speakers"], 2)
+        self.assertEqual(len(diar_res["speakers"]), 2)
+        self.assertGreater(diar_res["total_speech_duration"], 0.0)
+
+        # 6. Interfaz gráfica MainWindow y TabVoiceIsolation
+        win = MainWindow(initial_tab="voice")
+        win.show()
+        self.assertEqual(win.tabs.currentIndex(), 7)
+        voice_tab = win.tab_voice
+        self.assertIsNotNone(voice_tab)
+
+        # Probar cambio de modo en UI
+        voice_tab.radio_mode_diar.setChecked(True)
+        self.assertFalse(voice_tab.panel_diar.isHidden())
+        self.assertTrue(voice_tab.panel_clean.isHidden())
+
+        voice_tab.radio_mode_clean.setChecked(True)
+        self.assertFalse(voice_tab.panel_clean.isHidden())
+        self.assertTrue(voice_tab.panel_diar.isHidden())
 
         win.close()
 

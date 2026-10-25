@@ -411,6 +411,10 @@ def get_base_output_dir() -> str:
     return b_dir
 
 
+# Alias de conveniencia
+get_base_dir = get_base_output_dir
+
+
 def is_auto_suggest_subfolders() -> bool:
     cfg = load_config()
     return bool(cfg.get("auto_suggest_subfolders", True))

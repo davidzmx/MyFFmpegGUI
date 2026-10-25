@@ -1266,3 +1266,253 @@ def parse_comparison_metrics(stderr_text) -> Dict[str, Any]:
             res["rating_color"] = "#ef4444"
 
     return res
+
+
+def build_voice_isolation_command(
+    ffmpeg_path: str,
+    input_file: str,
+    output_file: str,
+    profile: str = "moderate",  # "light", "moderate", "aggressive", "studio"
+    normalize_speech: bool = True,
+    remove_silence: bool = False,
+    audio_format: str = "wav_16",  # "wav_16", "wav_24", "mp3_320k", "flac"
+    sample_rate: int = 0,
+    channels: int = 0
+) -> List[str]:
+    """
+    Construye el comando FFmpeg para aislar y limpiar voces de un video o audio
+    utilizando filtros de banda vocal, reducción de ruido espectral y normalización de habla.
+    """
+    cmd = [ffmpeg_path, "-y", "-i", input_file, "-vn"]
+
+    # Construir cadena de filtros de audio
+    filters = []
+
+    # Paso de banda vocal para eliminar retumbes graves (<80Hz) y siseos agudos (>11-12kHz)
+    if profile == "light":
+        filters.append("highpass=f=80,lowpass=f=12000")
+        filters.append("afftdn=nf=-20:tn=1")
+    elif profile == "aggressive":
+        filters.append("highpass=f=95,lowpass=f=10000")
+        filters.append("afftdn=nf=-34:tn=1")
+    elif profile == "studio":
+        filters.append("highpass=f=80,lowpass=f=12000")
+        filters.append("afftdn=nf=-22:tn=1")
+        filters.append("speechnorm=e=4:r=0.0001:l=1")
+    else:  # "moderate"
+        filters.append("highpass=f=85,lowpass=f=11000")
+        filters.append("afftdn=nf=-26:tn=1")
+
+    # Normalización de voz si no está ya en el perfil
+    if normalize_speech and profile != "studio":
+        filters.append("speechnorm=e=4:r=0.0001:l=1")
+
+    # Eliminación opcional de pausas y silencios
+    if remove_silence:
+        filters.append("silenceremove=start_periods=1:start_duration=0.3:start_threshold=-38dB:stop_periods=-1:stop_duration=0.5:stop_threshold=-38dB")
+
+    if filters:
+        cmd.extend(["-af", ",".join(filters)])
+
+    # Frecuencia de muestreo
+    if sample_rate > 0:
+        cmd.extend(["-ar", str(sample_rate)])
+
+    # Canales de audio
+    if channels == 1:
+        cmd.extend(["-ac", "1"])
+    elif channels == 2:
+        cmd.extend(["-ac", "2"])
+
+    # Parámetros de codificador de salida
+    if audio_format == "wav_16":
+        cmd.extend(["-c:a", "pcm_s16le"])
+    elif audio_format == "wav_24":
+        cmd.extend(["-c:a", "pcm_s24le"])
+    elif audio_format == "mp3_320k":
+        cmd.extend(["-c:a", "libmp3lame", "-b:a", "320k"])
+    elif audio_format == "flac":
+        cmd.extend(["-c:a", "flac"])
+    else:
+        cmd.extend(["-c:a", "pcm_s16le"])
+
+    cmd.append(output_file)
+    return cmd
+
+
+def build_extract_mono_wav_command(
+    ffmpeg_path: str,
+    input_file: str,
+    output_wav: str,
+    sample_rate: int = 16000
+) -> List[str]:
+    """
+    Extrae una pista de audio PCM mono a 16 kHz optimizada para análisis acústico y diarización.
+    """
+    return [
+        ffmpeg_path, "-y",
+        "-i", input_file,
+        "-vn",
+        "-ac", "1",
+        "-ar", str(sample_rate),
+        "-c:a", "pcm_s16le",
+        output_wav
+    ]
+
+
+def build_silence_detect_command(
+    ffmpeg_path: str,
+    input_file: str,
+    noise_db: float = -30.0,
+    min_duration: float = 0.4
+) -> List[str]:
+    """
+    Construye el comando para detectar marcas de silencio y voz en el audio mediante silencedetect.
+    """
+    filter_str = f"silencedetect=noise={noise_db}dB:d={min_duration}"
+    return [
+        ffmpeg_path, "-y",
+        "-i", input_file,
+        "-vn",
+        "-af", filter_str,
+        "-f", "null", "-"
+    ]
+
+
+def parse_silence_detect_output(
+    stderr_text: str,
+    total_duration: float = 0.0,
+    min_speech_sec: float = 0.35
+) -> List[Tuple[float, float]]:
+    """
+    Analiza la salida de silencedetect e invierte los silencios para obtener
+    los intervalos exactos de habla humana [(inicio, fin), ...].
+    """
+    if isinstance(stderr_text, (list, tuple)):
+        stderr_text = "\n".join(str(l) for l in stderr_text)
+    elif not isinstance(stderr_text, str):
+        stderr_text = str(stderr_text or "")
+
+    silence_starts = []
+    silence_ends = []
+
+    for line in stderr_text.splitlines():
+        if "silence_start:" in line:
+            m = re.search(r"silence_start:\s*([0-9.]+)", line)
+            if m:
+                try:
+                    silence_starts.append(float(m.group(1)))
+                except Exception:
+                    pass
+        elif "silence_end:" in line:
+            m = re.search(r"silence_end:\s*([0-9.]+)", line)
+            if m:
+                try:
+                    silence_ends.append(float(m.group(1)))
+                except Exception:
+                    pass
+
+    # Si se pasó total_duration = 0, intentar deducirla del log
+    if total_duration <= 0.0:
+        dur_match = re.search(r"Duration:\s*(\d{2}:\d{2}:\d{2}\.\d+)", stderr_text)
+        if dur_match:
+            try:
+                parts = dur_match.group(1).split(":")
+                total_duration = float(parts[0]) * 3600 + float(parts[1]) * 60 + float(parts[2])
+            except Exception:
+                pass
+
+    if total_duration <= 0.0 and silence_ends:
+        total_duration = max(silence_ends) + 1.0
+
+    # Parear silencios
+    silence_intervals = []
+    num_starts = len(silence_starts)
+    num_ends = len(silence_ends)
+    max_pairs = min(num_starts, num_ends)
+
+    for i in range(max_pairs):
+        s = silence_starts[i]
+        e = silence_ends[i]
+        if e > s:
+            silence_intervals.append((s, e))
+
+    # Si quedó un silence_start huérfano al final del audio
+    if num_starts > num_ends and total_duration > silence_starts[-1]:
+        silence_intervals.append((silence_starts[-1], total_duration))
+
+    # Invertir los silencios para obtener los tramos de voz
+    speech_segments = []
+    current_time = 0.0
+
+    for s_start, s_end in silence_intervals:
+        if s_start > current_time:
+            seg_len = s_start - current_time
+            if seg_len >= min_speech_sec:
+                speech_segments.append((round(current_time, 3), round(s_start, 3)))
+        current_time = max(current_time, s_end)
+
+    if total_duration > current_time:
+        rem_len = total_duration - current_time
+        if rem_len >= min_speech_sec:
+            speech_segments.append((round(current_time, 3), round(total_duration, 3)))
+
+    return speech_segments
+
+
+def build_stitch_segments_command(
+    ffmpeg_path: str,
+    input_file: str,
+    segments: List[Tuple[float, float]],
+    output_file: str,
+    apply_cleanup: bool = True,
+    audio_format: str = "wav_16"
+) -> List[str]:
+    """
+    Construye un comando FFmpeg para unir una lista de intervalos de tiempo [(inicio, fin), ...]
+    en una única pista de audio continua y sin pérdidas, aplicando opcionalmente limpieza vocal.
+    """
+    if not segments:
+        raise ValueError("Se requiere al menos un segmento de tiempo para ensamblar.")
+
+    cmd = [ffmpeg_path, "-y", "-i", input_file, "-vn"]
+
+    # Caso 1: Un solo segmento continuo
+    if len(segments) == 1:
+        st, en = segments[0]
+        cmd.extend(["-ss", f"{st:.3f}", "-to", f"{en:.3f}"])
+        if apply_cleanup:
+            cmd.extend(["-af", "highpass=f=80,lowpass=f=12000,afftdn=nf=-24:tn=1,speechnorm=e=4:r=0.0001:l=1"])
+    else:
+        # Caso 2: Múltiples segmentos unidos mediante atrim y concat
+        v_parts = []
+        for i, (st, en) in enumerate(segments):
+            v_parts.append(f"[0:a]atrim=start={st:.3f}:end={en:.3f},asetpts=PTS-STARTPTS[a{i}]")
+
+        n_inputs = len(segments)
+        cat_inputs = "".join(f"[a{i}]" for i in range(n_inputs))
+
+        if apply_cleanup:
+            concat_filter = (
+                ";".join(v_parts) +
+                f";{cat_inputs}concat=n={n_inputs}:v=0:a=1[araw];"
+                "[araw]highpass=f=80,lowpass=f=12000,afftdn=nf=-24:tn=1,speechnorm=e=4:r=0.0001:l=1[aout]"
+            )
+        else:
+            concat_filter = ";".join(v_parts) + f";{cat_inputs}concat=n={n_inputs}:v=0:a=1[aout]"
+
+        cmd.extend(["-filter_complex", concat_filter, "-map", "[aout]"])
+
+    if audio_format == "wav_16":
+        cmd.extend(["-c:a", "pcm_s16le"])
+    elif audio_format == "wav_24":
+        cmd.extend(["-c:a", "pcm_s24le"])
+    elif audio_format == "mp3_320k":
+        cmd.extend(["-c:a", "libmp3lame", "-b:a", "320k"])
+    elif audio_format == "flac":
+        cmd.extend(["-c:a", "flac"])
+    else:
+        cmd.extend(["-c:a", "pcm_s16le"])
+
+    cmd.append(output_file)
+    return cmd
