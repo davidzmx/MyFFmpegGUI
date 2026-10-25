@@ -339,7 +339,7 @@ class TabVoiceIsolation(QWidget):
         self.progress_bar = ProgressBarWithStatus()
         form_layout.addWidget(self.progress_bar)
 
-        self.output_actions = OutputActionsWidget()
+        self.output_actions = OutputActionsWidget(file_label="Abrir Audio Limpio")
         form_layout.addWidget(self.output_actions)
 
         # Botones de ejecución
