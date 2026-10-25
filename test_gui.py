@@ -1504,6 +1504,11 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(len(diar_res["speakers"]), 2)
         self.assertGreater(diar_res["total_speech_duration"], 0.0)
 
+        # Probar diarización automática sobre un único segmento continuo de habla (sin pre-segmentar)
+        diar_continuous = diarization_core.perform_speaker_diarization(test_wav, [(0.0, 4.0)], num_speakers=2)
+        self.assertEqual(diar_continuous["num_speakers"], 2)
+        self.assertEqual(len(diar_continuous["speakers"]), 2)
+
         # 6. Interfaz gráfica MainWindow y TabVoiceIsolation
         win = MainWindow(initial_tab="voice")
         win.show()

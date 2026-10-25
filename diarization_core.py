@@ -14,6 +14,7 @@ import scipy.signal
 import scipy.fft
 import scipy.io.wavfile as wavfile
 import scipy.cluster.vq as vq
+import scipy.cluster.hierarchy as sch
 
 
 def compute_acoustic_features(sig: np.ndarray, sr: int = 16000, n_mfcc: int = 13) -> np.ndarray:
@@ -150,6 +151,87 @@ def select_best_sample_segments(
     return chosen
 
 
+def subdivide_speech_segments(
+    segments: List[Tuple[float, float]],
+    chunk_sec: float = 1.5,
+    min_chunk_sec: float = 0.6
+) -> List[Tuple[float, float]]:
+    """
+    Subdivide intervalos de habla continuos en ventanas uniformes de longitud óptima (~1.5s)
+    para permitir el análisis acústico por fragmentos y evitar que tramos largos
+    sean tratados como una única muestra indivisible.
+    """
+    subdivided = []
+    for st, en in segments:
+        dur = en - st
+        if dur <= chunk_sec + (min_chunk_sec / 2.0):
+            if dur >= min_chunk_sec:
+                subdivided.append((round(st, 3), round(en, 3)))
+            elif subdivided:
+                # Si es muy breve pero ya hay fragmentos previos, expandir el previo
+                prev_st, _ = subdivided[-1]
+                subdivided[-1] = (prev_st, round(en, 3))
+            else:
+                subdivided.append((round(st, 3), round(en, 3)))
+            continue
+
+        curr = st
+        while curr < en:
+            nxt = curr + chunk_sec
+            if en - nxt < min_chunk_sec:
+                subdivided.append((round(curr, 3), round(en, 3)))
+                break
+            else:
+                subdivided.append((round(curr, 3), round(nxt, 3)))
+                curr = nxt
+    return subdivided
+
+
+def merge_contiguous_segments(
+    chunks: List[Tuple[float, float]],
+    labels: np.ndarray,
+    max_gap: float = 0.35
+) -> Dict[int, List[Tuple[float, float]]]:
+    """
+    Agrupa los fragmentos acústicos etiquetados por interlocutor y fusiona
+    aquellos consecutivos o con pausas mínimas (< max_gap) para reconstruir
+    las intervenciones naturales continuas de cada persona.
+    """
+    speaker_segs: Dict[int, List[Tuple[float, float]]] = {}
+    for idx, (st, en) in enumerate(chunks):
+        lbl = int(labels[idx])
+        if lbl not in speaker_segs:
+            speaker_segs[lbl] = []
+        curr_list = speaker_segs[lbl]
+        if curr_list:
+            last_st, last_en = curr_list[-1]
+            if st - last_en <= max_gap:
+                curr_list[-1] = (last_st, round(max(last_en, en), 3))
+                continue
+        curr_list.append((round(st, 3), round(en, 3)))
+    return speaker_segs
+
+
+def get_calinski_harabasz_score(X: np.ndarray, labels: np.ndarray, k: int) -> float:
+    """Calcula el índice de separación Calinski-Harabasz para evaluar la calidad de los clusters."""
+    N = len(X)
+    if N <= k or k < 2:
+        return 0.0
+    overall_mean = np.mean(X, axis=0)
+    bgss = 0.0
+    wgss = 0.0
+    for c in range(k):
+        members = X[labels == c]
+        if len(members) == 0:
+            return 0.0
+        c_mean = np.mean(members, axis=0)
+        bgss += len(members) * np.sum((c_mean - overall_mean) ** 2)
+        wgss += np.sum((members - c_mean) ** 2)
+    if wgss < 1e-6:
+        return 9999.0
+    return float((bgss / (k - 1)) / (wgss / (N - k)))
+
+
 def perform_speaker_diarization(
     audio_wav_path: str,
     speech_segments: List[Tuple[float, float]],
@@ -158,7 +240,8 @@ def perform_speaker_diarization(
 ) -> Dict[str, Any]:
     """
     Ejecuta el agrupamiento por timbre vocal en los segmentos de habla detectados.
-    Devuelve los interlocutores encontrados, sus estadísticas y sus muestras optimizadas.
+    Aplica sub-segmentación en ventanas acústicas de 1.5s, ponderación biométrica (F0 Pitch + MFCCs),
+    agrupamiento jerárquico determinista (HAC Ward) y fusión contigua de intervenciones.
     """
     result = {
         "total_speech_duration": 0.0,
@@ -184,18 +267,20 @@ def perform_speaker_diarization(
     total_speech_dur = sum((en - st) for st, en in speech_segments)
     result["total_speech_duration"] = round(total_speech_dur, 2)
 
-    # 2. Extraer características acústicas de cada segmento
-    feature_matrix = []
-    valid_segments = []
+    # 2. Sub-segmentar en ventanas acústicas de 1.5s para análisis fino
+    eval_chunks = subdivide_speech_segments(speech_segments, chunk_sec=1.5, min_chunk_sec=0.6)
 
-    for st, en in speech_segments:
+    feature_matrix = []
+    valid_chunks = []
+
+    for st, en in eval_chunks:
         start_idx = int(st * sr)
         end_idx = int(en * sr)
         if end_idx > start_idx + int(sr * 0.15) and start_idx < len(audio_data):
             seg_sig = audio_data[start_idx:min(len(audio_data), end_idx)]
             feat = compute_acoustic_features(seg_sig, sr)
             feature_matrix.append(feat)
-            valid_segments.append((st, en))
+            valid_chunks.append((st, en))
 
     if not feature_matrix:
         return result
@@ -208,49 +293,66 @@ def perform_speaker_diarization(
     std = np.where(std == 0, 1.0, std)
     norm_features = (features - mean) / std
 
-    n_samples = len(valid_segments)
+    # Ponderación acústica: potenciar discriminadores biométricos (F0 Pitch y resonancias MFCC)
+    weights = np.ones(norm_features.shape[1], dtype=np.float32)
+    weights[0:6] = 1.6     # MFCCs inferiores (formantes / tracto vocal)
+    weights[6:13] = 1.0    # MFCCs superiores
+    weights[13:26] = 0.6   # Variabilidad MFCC
+    if len(weights) > 26:
+        weights[26] = 2.8  # Tono fundamental F0 / Pitch (clave para distinguir voces)
+    if len(weights) > 27:
+        weights[27] = 1.4  # Centroide espectral (brillo de la voz)
 
-    # 3. Determinar número de interlocutores
-    if num_speakers is not None and num_speakers >= 1:
-        k = min(num_speakers, n_samples)
-    else:
-        # Autodetección: evaluar distorsión k-means entre 1 y min(max_speakers, n_samples)
-        best_k = 1
-        best_score = float("inf")
-        max_k_test = min(max_speakers, n_samples)
+    weighted_features = norm_features * weights
+    n_samples = len(valid_chunks)
 
-        if max_k_test >= 2 and n_samples >= 3:
-            for cand_k in range(2, max_k_test + 1):
-                try:
-                    centroids, labels = vq.kmeans2(norm_features, cand_k, minit='points', iter=15)
-                    # Calcular inercia intra-cluster
-                    diffs = norm_features - centroids[labels]
-                    distortion = np.mean(np.sum(diffs ** 2, axis=1))
-                    # Penalización de complejidad (criterio BIC simplificado)
-                    score = distortion + (cand_k * 0.45)
-                    if score < best_score:
-                        best_score = score
-                        best_k = cand_k
-                except Exception:
-                    pass
-        k = best_k
-
-    # 4. Agrupamiento final
-    if k <= 1 or n_samples < 2:
-        labels = np.zeros(n_samples, dtype=int)
+    # 3. Agrupamiento Jerárquico Aglomerativo (Ward HAC)
+    if n_samples <= 1:
         k = 1
-    else:
-        try:
-            _, labels = vq.kmeans2(norm_features, k, minit='points', iter=25)
-        except Exception:
+        labels = np.zeros(n_samples, dtype=int)
+    elif num_speakers is not None and num_speakers >= 1:
+        # Número de interlocutores fijado explícitamente por el usuario
+        k = min(num_speakers, n_samples)
+        if k <= 1:
             labels = np.zeros(n_samples, dtype=int)
+        else:
+            Z = sch.linkage(weighted_features, method='ward')
+            labels = sch.fcluster(Z, t=k, criterion='maxclust') - 1
+    else:
+        # Autodetección: analizar salto de distancias en dendrograma y score Calinski-Harabasz
+        max_k_test = min(max_speakers, n_samples)
+        if n_samples < 4 or max_k_test < 2:
             k = 1
+            labels = np.zeros(n_samples, dtype=int)
+        else:
+            Z = sch.linkage(weighted_features, method='ward')
+            ratio_2 = Z[-1, 2] / max(1e-5, Z[-2, 2])
+            
+            best_ch = -1.0
+            best_k = 1
+            for cand_k in range(2, max_k_test + 1):
+                c_lbls = sch.fcluster(Z, t=cand_k, criterion='maxclust') - 1
+                ch = get_calinski_harabasz_score(weighted_features, c_lbls, cand_k)
+                if ch > best_ch:
+                    best_ch = ch
+                    best_k = cand_k
 
-    # 5. Agrupar segmentos por interlocutor
-    speaker_dict = {i: [] for i in range(k)}
-    for idx, (st, en) in enumerate(valid_segments):
-        lbl = int(labels[idx])
-        speaker_dict[lbl].append((st, en))
+            if ratio_2 < 1.35 and best_ch < 4.0:
+                k = 1
+                labels = np.zeros(n_samples, dtype=int)
+            else:
+                k = best_k
+                labels = sch.fcluster(Z, t=k, criterion='maxclust') - 1
+
+    # 4. Suavizado temporal de etiquetas (eliminar picos o tropiezos aislados de 1 fragmento)
+    if len(labels) >= 5 and k >= 2:
+        try:
+            labels = scipy.signal.medfilt(labels, 3).astype(int)
+        except Exception:
+            pass
+
+    # 5. Fusionar fragmentos continuos de cada interlocutor
+    speaker_dict = merge_contiguous_segments(valid_chunks, labels, max_gap=0.35)
 
     # Ordenar interlocutores por tiempo total de habla (el que más habla será Hablante 1)
     sorted_speakers = sorted(

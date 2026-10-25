@@ -34,7 +34,7 @@ class DiarizationWorker(QThread):
         ffprobe_path: Optional[str],
         input_file: str,
         num_speakers: Optional[int] = None,
-        noise_threshold_db: float = -32.0,
+        noise_threshold_db: float = -28.0,
         min_silence_duration: float = 0.35,
         parent=None
     ):
@@ -135,26 +135,19 @@ class DiarizationWorker(QThread):
             stderr_silence_str = err_silence.decode("utf-8", errors="replace")
             speech_segments = ffmpeg_core.parse_silence_detect_output(stderr_silence_str, total_duration)
 
-            # Si no se detectaron silencios marcados (audio continuo), segmentar en bloques de 2.5 seg
             if not speech_segments and total_duration > 0:
-                self.log_signal.emit("• Aviso: Audio continuo sin silencios marcados. Aplicando división rítmica uniforme.\n")
-                step = 2.5
-                curr = 0.0
-                while curr < total_duration:
-                    nxt = min(total_duration, curr + step)
-                    speech_segments.append((round(curr, 2), round(nxt, 2)))
-                    curr = nxt
+                speech_segments = [(0.0, round(total_duration, 3))]
 
-            self.log_signal.emit(f"• Fragmentos de habla identificados: {len(speech_segments)}\n")
+            self.log_signal.emit(f"• Tramos de habla identificados por VAD: {len(speech_segments)}\n")
 
             if not speech_segments:
                 self._cleanup_temp()
                 self.finished_signal.emit(False, "No se detectó actividad de habla en el archivo proporcionado.", {})
                 return
 
-            # Paso 3: Análisis de timbre vocal (MFCC + Pitch + Centroide) y clustering
-            self.progress_signal.emit(70.0, "Analizando timbres vocales y agrupando interlocutores...", f"{len(speech_segments)} tramos")
-            self.log_signal.emit("[4/4] Agrupando interlocutores por biometría tímbrica...\n")
+            # Paso 3: Análisis de timbre vocal (MFCC + Pitch + Centroide) y clustering jerárquico
+            self.progress_signal.emit(70.0, "Analizando timbres vocales y agrupando interlocutores...", "Ventanas acústicas de 1.5s")
+            self.log_signal.emit("[4/4] Extrayendo huellas acústicas (MFCC + Pitch F0) y agrupando interlocutores...\n")
 
             diar_result = diarization_core.perform_speaker_diarization(
                 self.temp_analysis_wav,
