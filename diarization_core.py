@@ -20,9 +20,10 @@ import scipy.cluster.hierarchy as sch
 def compute_acoustic_features(sig: np.ndarray, sr: int = 16000, n_mfcc: int = 13) -> np.ndarray:
     """
     Calcula la huella acústica (timbre vocal) de un fragmento de audio:
-    - 13 Coeficientes Cepstrales en Escala Mel (MFCCs: media y desviación típica = 26 dimensiones)
-    - Estimación de Tono Fundamental F0 / Pitch (media y estabilidad)
-    - Centroide Espectral (brillo de la voz)
+    - 13 Coeficientes Cepstrales en Escala Mel (MFCCs sobre cuadros activos de voz)
+    - Estimación de Tono Fundamental F0 / Pitch (autocorrelación normalizada en cuadros sonoros)
+    - Centroide Espectral (brillo tímbrico de la voz)
+    - Varianza energética
     """
     if len(sig) < int(sr * 0.08):
         return np.zeros(n_mfcc * 2 + 3, dtype=np.float32)
@@ -42,6 +43,13 @@ def compute_acoustic_features(sig: np.ndarray, sr: int = 16000, n_mfcc: int = 13
     ).T
     frames = pad_sig[indices.astype(np.int32, copy=False)]
     frames = frames * np.hamming(frame_len)
+
+    # Filtrar cuadros con energía activa para evitar que el silencio o ruido de fondo contamine el timbre
+    frame_energies = np.sum(frames ** 2, axis=1)
+    max_energy = np.max(frame_energies) if len(frame_energies) > 0 else 0.0
+    active_mask = (frame_energies >= (max_energy * 0.08)) if max_energy > 1e-5 else np.ones(len(frames), dtype=bool)
+    if not np.any(active_mask):
+        active_mask = np.ones(len(frames), dtype=bool)
 
     # 3. FFT y Espectro de Potencia
     nfft = 512
@@ -72,17 +80,26 @@ def compute_acoustic_features(sig: np.ndarray, sr: int = 16000, n_mfcc: int = 13
 
     # 5. Transformada Discreta del Coseno (DCT) para extraer MFCCs
     mfcc = scipy.fft.dct(filter_banks, type=2, axis=1, norm='ortho')[:, 1 : (n_mfcc + 1)]
-    mfcc_mean = np.mean(mfcc, axis=0)
-    mfcc_std = np.std(mfcc, axis=0)
+    mfcc_active = mfcc[active_mask]
+    if len(mfcc_active) > 0:
+        mfcc_mean = np.mean(mfcc_active, axis=0)
+        mfcc_std = np.std(mfcc_active, axis=0)
+    else:
+        mfcc_mean = np.mean(mfcc, axis=0)
+        mfcc_std = np.std(mfcc, axis=0)
 
-    # 6. Estimación de Pitch (Frecuencia Fundamental F0 por autocorrelación)
+    # 6. Estimación de Pitch (Frecuencia Fundamental F0 por autocorrelación de cuadros sonoros)
     pitch_val = estimate_fundamental_pitch(sig, sr)
 
-    # 7. Centroide Espectral
+    # 7. Centroide Espectral (brillo de la voz en cuadros activos)
     freqs = np.fft.rfftfreq(nfft, 1.0 / sr)
-    spectral_centroid = np.sum(freqs * np.mean(mag_frames, axis=0)) / max(1e-6, np.sum(np.mean(mag_frames, axis=0)))
+    mag_active = mag_frames[active_mask]
+    if len(mag_active) > 0:
+        spectral_centroid = np.sum(freqs * np.mean(mag_active, axis=0)) / max(1e-6, np.sum(np.mean(mag_active, axis=0)))
+    else:
+        spectral_centroid = np.sum(freqs * np.mean(mag_frames, axis=0)) / max(1e-6, np.sum(np.mean(mag_frames, axis=0)))
 
-    # Combinar en vector único de características acústicas
+    # Combinar en vector único de características acústicas (29 dimensiones)
     features = np.concatenate([
         mfcc_mean,
         mfcc_std,
@@ -93,21 +110,46 @@ def compute_acoustic_features(sig: np.ndarray, sr: int = 16000, n_mfcc: int = 13
 
 def estimate_fundamental_pitch(sig: np.ndarray, sr: int = 16000) -> float:
     """
-    Estima el tono medio F0 (Pitch) de la voz mediante autocorrelación en el rango humano (75Hz a 380Hz).
+    Estima el tono medio F0 (Pitch) evaluando cuadros sonoros mediante autocorrelación normalizada
+    en el rango vocal humano (75Hz a 380Hz). Descarta cuadros sordos para evitar valores espurios.
     """
     if len(sig) < int(sr * 0.05):
         return 0.0
+
+    frame_len = int(0.030 * sr)  # 30ms
+    frame_step = int(0.015 * sr) # 15ms
     min_lag = int(sr / 380)
     max_lag = int(sr / 75)
-    chunk = sig[:min(len(sig), sr * 2)]  # Tomar máximo 2 segundos para rapidez
+    num_frames = max(1, int(np.ceil(float(len(sig) - frame_len) / frame_step)))
+    f0_voiced = []
+
+    for i in range(num_frames):
+        st = i * frame_step
+        en = min(len(sig), st + frame_len)
+        frame = sig[st:en]
+        if len(frame) < frame_len:
+            frame = np.pad(frame, (0, frame_len - len(frame)))
+        energy = np.sum(frame ** 2)
+        if energy < 1e-4:
+            continue
+        corr = np.correlate(frame, frame, mode='full')[len(frame) - 1:]
+        if corr[0] > 1e-5 and max_lag < len(corr):
+            norm_corr = corr / corr[0]
+            peak_idx = min_lag + np.argmax(norm_corr[min_lag:max_lag])
+            if norm_corr[peak_idx] > 0.28:
+                f0_voiced.append(sr / peak_idx)
+
+    if f0_voiced:
+        return float(np.median(f0_voiced))
+
+    # Respaldo por correlación de trozo entero
+    chunk = sig[:min(len(sig), sr * 2)]
     corr = scipy.signal.correlate(chunk, chunk, mode='full')[len(chunk) - 1:]
-    if max_lag > len(corr):
-        max_lag = len(corr) - 1
-    if min_lag >= max_lag:
-        return 0.0
-    peak_lag = min_lag + np.argmax(corr[min_lag:max_lag])
-    if peak_lag > 0:
-        return float(sr / peak_lag)
+    if max_lag < len(corr) and min_lag < max_lag and corr[0] > 1e-5:
+        norm_corr = corr / corr[0]
+        peak_lag = min_lag + np.argmax(norm_corr[min_lag:max_lag])
+        if norm_corr[peak_lag] > 0.25:
+            return float(sr / peak_lag)
     return 0.0
 
 
@@ -153,11 +195,11 @@ def select_best_sample_segments(
 
 def subdivide_speech_segments(
     segments: List[Tuple[float, float]],
-    chunk_sec: float = 1.5,
-    min_chunk_sec: float = 0.6
+    chunk_sec: float = 1.2,
+    min_chunk_sec: float = 0.5
 ) -> List[Tuple[float, float]]:
     """
-    Subdivide intervalos de habla continuos en ventanas uniformes de longitud óptima (~1.5s)
+    Subdivide intervalos de habla continuos en ventanas uniformes de longitud óptima (~1.2s)
     para permitir el análisis acústico por fragmentos y evitar que tramos largos
     sean tratados como una única muestra indivisible.
     """
@@ -168,7 +210,6 @@ def subdivide_speech_segments(
             if dur >= min_chunk_sec:
                 subdivided.append((round(st, 3), round(en, 3)))
             elif subdivided:
-                # Si es muy breve pero ya hay fragmentos previos, expandir el previo
                 prev_st, _ = subdivided[-1]
                 subdivided[-1] = (prev_st, round(en, 3))
             else:
@@ -212,24 +253,37 @@ def merge_contiguous_segments(
     return speaker_segs
 
 
-def get_calinski_harabasz_score(X: np.ndarray, labels: np.ndarray, k: int) -> float:
-    """Calcula el índice de separación Calinski-Harabasz para evaluar la calidad de los clusters."""
+def get_silhouette_score(X: np.ndarray, labels: np.ndarray, k: int) -> float:
+    """Calcula el coeficiente Silhouette medio para evaluar la separación de los clusters."""
     N = len(X)
     if N <= k or k < 2:
-        return 0.0
-    overall_mean = np.mean(X, axis=0)
-    bgss = 0.0
-    wgss = 0.0
-    for c in range(k):
-        members = X[labels == c]
-        if len(members) == 0:
-            return 0.0
-        c_mean = np.mean(members, axis=0)
-        bgss += len(members) * np.sum((c_mean - overall_mean) ** 2)
-        wgss += np.sum((members - c_mean) ** 2)
-    if wgss < 1e-6:
-        return 9999.0
-    return float((bgss / (k - 1)) / (wgss / (N - k)))
+        return -1.0
+    sil_scores = []
+    for i in range(N):
+        same_idx = np.where(labels == labels[i])[0]
+        if len(same_idx) <= 1:
+            a = 0.0
+        else:
+            diffs = X[same_idx] - X[i]
+            a = float(np.mean(np.sqrt(np.sum(diffs ** 2, axis=1))))
+
+        b = float("inf")
+        for c in range(k):
+            if c == labels[i]:
+                continue
+            other_idx = np.where(labels == c)[0]
+            if len(other_idx) == 0:
+                continue
+            diffs = X[other_idx] - X[i]
+            mean_dist = float(np.mean(np.sqrt(np.sum(diffs ** 2, axis=1))))
+            if mean_dist < b:
+                b = mean_dist
+
+        if max(a, b) > 1e-6:
+            sil_scores.append((b - a) / max(a, b))
+        else:
+            sil_scores.append(0.0)
+    return float(np.mean(sil_scores)) if sil_scores else 0.0
 
 
 def perform_speaker_diarization(
@@ -240,8 +294,9 @@ def perform_speaker_diarization(
 ) -> Dict[str, Any]:
     """
     Ejecuta el agrupamiento por timbre vocal en los segmentos de habla detectados.
-    Aplica sub-segmentación en ventanas acústicas de 1.5s, ponderación biométrica (F0 Pitch + MFCCs),
-    agrupamiento jerárquico determinista (HAC Ward) y fusión contigua de intervenciones.
+    Aplica sub-segmentación en ventanas acústicas de 1.2s, ponderación biométrica (F0 Pitch + MFCCs),
+    normalización L2 direccional, agrupamiento jerárquico Ward con refinamiento de centroides
+    y fusión contigua de intervenciones.
     """
     result = {
         "total_speech_duration": 0.0,
@@ -267,8 +322,8 @@ def perform_speaker_diarization(
     total_speech_dur = sum((en - st) for st, en in speech_segments)
     result["total_speech_duration"] = round(total_speech_dur, 2)
 
-    # 2. Sub-segmentar en ventanas acústicas de 1.5s para análisis fino
-    eval_chunks = subdivide_speech_segments(speech_segments, chunk_sec=1.5, min_chunk_sec=0.6)
+    # 2. Sub-segmentar en ventanas acústicas de 1.2s para alta resolución temporal
+    eval_chunks = subdivide_speech_segments(speech_segments, chunk_sec=1.2, min_chunk_sec=0.5)
 
     feature_matrix = []
     valid_chunks = []
@@ -293,20 +348,25 @@ def perform_speaker_diarization(
     std = np.where(std == 0, 1.0, std)
     norm_features = (features - mean) / std
 
-    # Ponderación acústica: potenciar discriminadores biométricos (F0 Pitch y resonancias MFCC)
+    # Ponderación acústica: potenciar discriminadores biométricos (F0 Pitch y formantes MFCC)
     weights = np.ones(norm_features.shape[1], dtype=np.float32)
     weights[0:6] = 1.6     # MFCCs inferiores (formantes / tracto vocal)
     weights[6:13] = 1.0    # MFCCs superiores
-    weights[13:26] = 0.6   # Variabilidad MFCC
+    weights[13:26] = 0.5   # Variabilidad MFCC
     if len(weights) > 26:
-        weights[26] = 2.8  # Tono fundamental F0 / Pitch (clave para distinguir voces)
+        weights[26] = 3.2  # Tono fundamental F0 / Pitch (clave para separar timbres)
     if len(weights) > 27:
         weights[27] = 1.4  # Centroide espectral (brillo de la voz)
 
     weighted_features = norm_features * weights
+
+    # Normalización L2 por fila para desacoplar fluctuaciones de volumen / intensidad vocal
+    row_norms = np.linalg.norm(weighted_features, axis=1, keepdims=True)
+    row_norms = np.where(row_norms == 0, 1.0, row_norms)
+    l2_features = weighted_features / row_norms
     n_samples = len(valid_chunks)
 
-    # 3. Agrupamiento Jerárquico Aglomerativo (Ward HAC)
+    # 3. Agrupamiento Jerárquico Aglomerativo (Ward HAC sobre vectores de timbre direccional)
     if n_samples <= 1:
         k = 1
         labels = np.zeros(n_samples, dtype=int)
@@ -316,42 +376,62 @@ def perform_speaker_diarization(
         if k <= 1:
             labels = np.zeros(n_samples, dtype=int)
         else:
-            Z = sch.linkage(weighted_features, method='ward')
+            Z = sch.linkage(l2_features, method='ward')
             labels = sch.fcluster(Z, t=k, criterion='maxclust') - 1
     else:
-        # Autodetección: analizar salto de distancias en dendrograma y score Calinski-Harabasz
+        # Autodetección: analizar ratio de dendrograma y calidad de silueta
         max_k_test = min(max_speakers, n_samples)
         if n_samples < 4 or max_k_test < 2:
             k = 1
             labels = np.zeros(n_samples, dtype=int)
         else:
-            Z = sch.linkage(weighted_features, method='ward')
+            Z = sch.linkage(l2_features, method='ward')
             ratio_2 = Z[-1, 2] / max(1e-5, Z[-2, 2])
-            
-            best_ch = -1.0
+
+            best_sil = -1.0
             best_k = 1
             for cand_k in range(2, max_k_test + 1):
                 c_lbls = sch.fcluster(Z, t=cand_k, criterion='maxclust') - 1
-                ch = get_calinski_harabasz_score(weighted_features, c_lbls, cand_k)
-                if ch > best_ch:
-                    best_ch = ch
+                sil = get_silhouette_score(l2_features, c_lbls, cand_k)
+                if sil > best_sil:
+                    best_sil = sil
                     best_k = cand_k
 
-            if ratio_2 < 1.35 and best_ch < 4.0:
+            # Si el salto entre los dos últimos clusters es bajo y la silueta es pobre, es un solo hablante
+            if ratio_2 < 1.25 and best_sil < 0.40:
                 k = 1
                 labels = np.zeros(n_samples, dtype=int)
             else:
                 k = best_k
                 labels = sch.fcluster(Z, t=k, criterion='maxclust') - 1
 
-    # 4. Suavizado temporal de etiquetas (eliminar picos o tropiezos aislados de 1 fragmento)
+    # 4. Refinamiento por reasignación de centroides (K-Means Refinement)
+    if k >= 2 and n_samples >= k:
+        for _ in range(4):
+            centroids = []
+            for c in range(k):
+                c_members = l2_features[labels == c]
+                if len(c_members) > 0:
+                    c_mean = np.mean(c_members, axis=0)
+                    c_norm = np.linalg.norm(c_mean)
+                    centroids.append(c_mean / max(1e-5, c_norm))
+                else:
+                    centroids.append(l2_features[np.random.randint(0, n_samples)])
+            centroids = np.array(centroids)
+            sims = np.dot(l2_features, centroids.T)
+            new_labels = np.argmax(sims, axis=1)
+            if np.array_equal(new_labels, labels):
+                break
+            labels = new_labels
+
+    # 5. Suavizado temporal de etiquetas (eliminar tropiezos aislados de 1 fragmento)
     if len(labels) >= 5 and k >= 2:
         try:
             labels = scipy.signal.medfilt(labels, 3).astype(int)
         except Exception:
             pass
 
-    # 5. Fusionar fragmentos continuos de cada interlocutor
+    # 6. Fusionar fragmentos continuos de cada interlocutor
     speaker_dict = merge_contiguous_segments(valid_chunks, labels, max_gap=0.35)
 
     # Ordenar interlocutores por tiempo total de habla (el que más habla será Hablante 1)

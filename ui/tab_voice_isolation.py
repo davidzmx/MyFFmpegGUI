@@ -114,6 +114,18 @@ class SpeakerCard(QFrame):
 
         layout.addLayout(h_actions)
 
+    def set_playing(self, is_playing: bool):
+        """Alterna el botón entre Reproducir y Detener según el estado de reproducción."""
+        style = self.style()
+        if is_playing:
+            self.btn_play.setText(" Detener")
+            self.btn_play.setIcon(style.standardIcon(QStyle.SP_MediaStop))
+            self.btn_play.setStyleSheet("padding: 4px 10px; font-weight: bold; background-color: #dc2626; color: white;")
+        else:
+            self.btn_play.setText(" Reproducir Muestra")
+            self.btn_play.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+            self.btn_play.setStyleSheet("padding: 4px 10px; font-weight: 500;")
+
 
 class TabVoiceIsolation(QWidget):
     def __init__(self, get_ffmpeg_paths_fn, parent=None):
@@ -127,6 +139,9 @@ class TabVoiceIsolation(QWidget):
 
         # Reproductor interno para vista previa de voz
         self.player = QMediaPlayer(self)
+        self.player.stateChanged.connect(self._on_player_state_changed)
+        self.current_playing_spk_id: Optional[int] = None
+        self.speaker_cards: Dict[int, SpeakerCard] = {}
 
         form_widget = QWidget()
         form_layout = QVBoxLayout(form_widget)
@@ -385,6 +400,15 @@ class TabVoiceIsolation(QWidget):
             self.cmd_preview.set_command("Diarización con detección VAD acústica y clustering tímbrico en segundo plano.")
 
     def _on_file_selected(self, path: str):
+        # Limpiar resultados, tarjetas y reproducción del archivo anterior
+        self._cleanup_playback_procs()
+        self._clear_speaker_cards()
+        self.group_results.setVisible(False)
+        self.diarization_results = None
+        self.output_actions.hide_output()
+        self.progress_bar.reset()
+        self.progress_bar.set_status("Listo para procesar.")
+
         if not path or not os.path.isfile(path):
             self.lbl_info.setText("Duración: --:--:-- | Códec de audio: No cargado | Frecuencia: -- Hz")
             self.media_duration = 0.0
@@ -577,6 +601,7 @@ class TabVoiceIsolation(QWidget):
             QMessageBox.warning(self, "Diarización no completada", message)
 
     def _clear_speaker_cards(self):
+        self.speaker_cards.clear()
         while self.layout_cards.count():
             item = self.layout_cards.takeAt(0)
             widget = item.widget()
@@ -586,6 +611,7 @@ class TabVoiceIsolation(QWidget):
     def _render_speaker_cards(self, speakers: List[dict]):
         self._clear_speaker_cards()
         for spk in speakers:
+            spk_id = spk.get("id", 1)
             card = SpeakerCard(
                 speaker_data=spk,
                 on_play_sample_fn=self._play_speaker_sample,
@@ -593,11 +619,32 @@ class TabVoiceIsolation(QWidget):
                 on_export_full_fn=self._export_speaker_full,
                 parent=self.cards_container
             )
+            self.speaker_cards[spk_id] = card
             self.layout_cards.addWidget(card)
 
+    def _on_player_state_changed(self, state):
+        """Maneja el fin o cambio de estado de la reproducción de audio."""
+        if state != QMediaPlayer.PlayingState:
+            self.current_playing_spk_id = None
+            self._update_speaker_cards_playing_state()
+
+    def _update_speaker_cards_playing_state(self):
+        """Sincroniza el botón de reproducir/detener en todas las tarjetas de interlocutor."""
+        for spk_id, card in self.speaker_cards.items():
+            card.set_playing(self.current_playing_spk_id == spk_id)
+
     def _play_speaker_sample(self, speaker_data: dict):
-        """Genera y reproduce una vista previa temporal de la muestra de ese interlocutor."""
+        """Genera y reproduce una vista previa temporal de la muestra de ese interlocutor, o la detiene si ya está activa."""
         spk_id = speaker_data.get("id", 1)
+
+        # Si ya se está reproduciendo este hablante, detenerlo inmediatamente
+        if self.current_playing_spk_id == spk_id and self.player.state() == QMediaPlayer.PlayingState:
+            self.player.stop()
+            self.current_playing_spk_id = None
+            self._update_speaker_cards_playing_state()
+            self.progress_bar.set_status("Reproducción de muestra detenida.")
+            return
+
         target_dur = self.combo_sample_target.currentData()
         if target_dur == 15.0:
             segs = speaker_data.get("sample_15") or speaker_data.get("segments", [])[:3]
@@ -651,7 +698,9 @@ class TabVoiceIsolation(QWidget):
         content = QMediaContent(QUrl.fromLocalFile(cached))
         self.player.setMedia(content)
         self.player.play()
-        self.progress_bar.set_status(f"Reproduciendo muestra de {speaker_data.get('name')}...")
+        self.current_playing_spk_id = spk_id
+        self._update_speaker_cards_playing_state()
+        self.progress_bar.set_status(f"Reproduciendo muestra de {speaker_data.get('name')}... (Haga clic en Detener para pausar)")
 
     def _export_speaker_sample(self, speaker_data: dict):
         """Exporta la muestra condensada pura (15s, 30s o 60s) de ese interlocutor."""
@@ -745,6 +794,8 @@ class TabVoiceIsolation(QWidget):
                 self.player.stop()
             except Exception:
                 pass
+        self.current_playing_spk_id = None
+        self._update_speaker_cards_playing_state()
         for p in list(self.temp_sample_cache.values()):
             if p and os.path.isfile(p):
                 try:
