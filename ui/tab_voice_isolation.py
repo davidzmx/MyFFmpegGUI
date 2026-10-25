@@ -498,7 +498,7 @@ class TabVoiceIsolation(QWidget):
         self.btn_cancel.setEnabled(True)
         self.progress_bar.reset()
         self.progress_bar.set_status("Iniciando aislamiento y limpieza vocal...")
-        self.log_console.clear()
+        self.log_console.clear_logs()
 
         self.worker = FFmpegWorker(
             command=cmd,
@@ -521,7 +521,7 @@ class TabVoiceIsolation(QWidget):
         self.btn_cancel.setEnabled(True)
         self.progress_bar.reset()
         self.progress_bar.set_status("Iniciando análisis acústico de interlocutores...")
-        self.log_console.clear()
+        self.log_console.clear_logs()
 
         self.diar_worker = DiarizationWorker(
             ffmpeg_path=ffmpeg_path,
@@ -536,18 +536,17 @@ class TabVoiceIsolation(QWidget):
         self.diar_worker.start()
 
     def _on_progress(self, pct: float, time_str: str, speed_info: str):
-        self.progress_bar.set_progress(pct)
         detail = f"[{speed_info}]" if speed_info else ""
-        self.progress_bar.set_status(f"Procesando: {time_str} {detail}".strip())
+        self.progress_bar.set_progress(pct, time_str, detail)
 
     def _on_clean_finished(self, success: bool, message: str, output_path: str):
         self.btn_run.setEnabled(True)
         self.btn_cancel.setEnabled(False)
 
         if success:
-            self.progress_bar.set_progress(100.0)
+            self.progress_bar.set_progress(100.0, "Listo", "Completado")
             self.progress_bar.set_status("¡Aislamiento vocal completado exitosamente!")
-            self.output_actions.set_output_path(output_path)
+            self.output_actions.show_output(output_path)
             QMessageBox.information(self, "Aislamiento Exitoso", f"Voz aislada guardada en:\n{output_path}")
         else:
             self.progress_bar.set_status("Error o cancelación en el proceso.")
@@ -563,7 +562,7 @@ class TabVoiceIsolation(QWidget):
             tot_speech = results.get("total_speech_duration", 0.0)
             tot_fmt = ffmpeg_core.format_seconds_to_time_str(tot_speech)
 
-            self.progress_bar.set_progress(100.0)
+            self.progress_bar.set_progress(100.0, "Listo", f"{num_spk} detectados")
             self.progress_bar.set_status(f"¡Diarización completada! {num_spk} interlocutores identificados.")
 
             self.lbl_results_summary.setText(

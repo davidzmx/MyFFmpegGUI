@@ -473,6 +473,9 @@ class LogConsole(QWidget):
     def clear_logs(self):
         self.text_edit.clear()
 
+    def clear(self):
+        self.clear_logs()
+
     def copy_logs(self):
         QApplication.clipboard().setText(self.text_edit.toPlainText())
 
@@ -505,12 +508,16 @@ class ProgressBarWithStatus(QWidget):
         layout.addWidget(self.bar)
         layout.addLayout(info_layout)
 
-    def set_progress(self, percent: float, current_time: str, extra: str):
+    def set_progress(self, percent: float, current_time: str = "", extra: str = ""):
         self.bar.setValue(int(percent))
         if current_time:
             self.lbl_time.setText(f"Tiempo: {current_time}")
         if extra:
             self.lbl_extra.setText(extra)
+
+    def set_status(self, status: str):
+        """Actualiza el texto descriptivo de estado."""
+        self.lbl_extra.setText(status)
 
     def reset(self):
         self.bar.setValue(0)
@@ -705,6 +712,10 @@ class OutputActionsWidget(QWidget):
         self.btn_open_folder.setIcon(self.style().standardIcon(QStyle.SP_DirIcon))
         self.btn_open_folder.setVisible(True)
         self.setVisible(True)
+
+    def set_output_path(self, path: str, is_folder_only: bool = False, custom_status: str = "Proceso completado exitosamente:"):
+        """Alias para show_output."""
+        self.show_output(path, is_folder_only=is_folder_only, custom_status=custom_status)
 
     def hide_output(self):
         self.setVisible(False)
