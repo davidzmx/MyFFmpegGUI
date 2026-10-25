@@ -6,6 +6,8 @@ Permite la extracción de voces limpias con reducción de ruido y la separación
 """
 
 import os
+import sys
+import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from PyQt5.QtCore import Qt, QUrl
@@ -623,7 +625,21 @@ class TabVoiceIsolation(QWidget):
                     apply_cleanup=self.chk_diar_cleanup.isChecked(),
                     audio_format="wav_16"
                 )
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                startupinfo = None
+                creationflags = 0
+                if sys.platform.startswith("win"):
+                    startupinfo = subprocess.STARTUPINFO()
+                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    creationflags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0x08000000
+
+                subprocess.run(
+                    cmd,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=True,
+                    startupinfo=startupinfo,
+                    creationflags=creationflags
+                )
                 cached = tmp_wav
                 self.temp_sample_cache[spk_id] = cached
             except Exception as e:
@@ -721,3 +737,18 @@ class TabVoiceIsolation(QWidget):
             self.diar_worker.cancel()
         self.progress_bar.set_status("Cancelando proceso...")
         self.btn_cancel.setEnabled(False)
+
+    def _cleanup_playback_procs(self):
+        """Detiene reproducción activa y elimina archivos temporales de vista previa."""
+        if hasattr(self, "player") and self.player:
+            try:
+                self.player.stop()
+            except Exception:
+                pass
+        for p in list(self.temp_sample_cache.values()):
+            if p and os.path.isfile(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+        self.temp_sample_cache.clear()
