@@ -22,6 +22,7 @@ from ui.widgets import (
     FileSelector, ProgressBarWithStatus, LogConsole, CommandPreviewWidget, OutputActionsWidget,
     setup_tab_console_layout
 )
+from ui.timeline_waveform import AudioSegmentSelectorWidget, format_seconds_exact
 import ffmpeg_core
 import config_manager
 from ffmpeg_worker import FFmpegWorker
@@ -39,6 +40,7 @@ class SpeakerCard(QFrame):
         on_play_sample_fn,
         on_export_sample_fn,
         on_export_full_fn,
+        on_edit_timeline_fn=None,
         parent=None
     ):
         super().__init__(parent)
@@ -46,6 +48,7 @@ class SpeakerCard(QFrame):
         self.on_play_sample_fn = on_play_sample_fn
         self.on_export_sample_fn = on_export_sample_fn
         self.on_export_full_fn = on_export_full_fn
+        self.on_edit_timeline_fn = on_edit_timeline_fn
 
         self.setFrameShape(QFrame.StyledPanel)
         self.setStyleSheet("""
@@ -101,6 +104,13 @@ class SpeakerCard(QFrame):
         self.btn_export_sample.setStyleSheet("padding: 4px 10px; font-weight: bold; background-color: #0284c7; color: white;")
         self.btn_export_sample.clicked.connect(lambda: self.on_export_sample_fn(self.speaker_data))
 
+        # Botón Ajustar en Línea de Tiempo
+        self.btn_edit_timeline = QPushButton(" ✂️ Ajustar en Línea de Tiempo")
+        self.btn_edit_timeline.setIcon(style.standardIcon(QStyle.SP_FileDialogContentsView))
+        self.btn_edit_timeline.setStyleSheet("padding: 4px 10px; font-weight: 500; background-color: #334155; color: #f1f5f9;")
+        if self.on_edit_timeline_fn:
+            self.btn_edit_timeline.clicked.connect(lambda: self.on_edit_timeline_fn(self.speaker_data))
+
         # Botón Exportar Todo el Diálogo
         self.btn_export_full = QPushButton(" Exportar Diálogo Completo")
         self.btn_export_full.setIcon(style.standardIcon(QStyle.SP_ArrowDown))
@@ -108,6 +118,7 @@ class SpeakerCard(QFrame):
         self.btn_export_full.clicked.connect(lambda: self.on_export_full_fn(self.speaker_data))
 
         h_actions.addWidget(self.btn_play)
+        h_actions.addWidget(self.btn_edit_timeline)
         h_actions.addWidget(self.btn_export_sample)
         h_actions.addWidget(self.btn_export_full)
         h_actions.addStretch()
@@ -140,8 +151,10 @@ class TabVoiceIsolation(QWidget):
         # Reproductor interno para vista previa de voz
         self.player = QMediaPlayer(self)
         self.player.stateChanged.connect(self._on_player_state_changed)
+        self.player.positionChanged.connect(self._on_player_position_changed)
         self.current_playing_spk_id: Optional[int] = None
         self.speaker_cards: Dict[int, SpeakerCard] = {}
+        self._timeline_stop_ms: Optional[int] = None
 
         form_widget = QWidget()
         form_layout = QVBoxLayout(form_widget)
@@ -171,13 +184,16 @@ class TabVoiceIsolation(QWidget):
 
         h_modes = QHBoxLayout()
         self.radio_mode_clean = QRadioButton("🎙️ Limpieza y Aislamiento Vocal (Pista de Voz Pura)")
+        self.radio_mode_manual = QRadioButton("✂️ Selección Gráfica de Voz (Línea de Tiempo)")
         self.radio_mode_diar = QRadioButton("👥 Separar por Hablante y Extraer Muestras (Diarización)")
         self.radio_mode_clean.setChecked(True)
 
         self.radio_mode_clean.toggled.connect(self._on_operation_mode_changed)
+        self.radio_mode_manual.toggled.connect(self._on_operation_mode_changed)
         self.radio_mode_diar.toggled.connect(self._on_operation_mode_changed)
 
         h_modes.addWidget(self.radio_mode_clean)
+        h_modes.addWidget(self.radio_mode_manual)
         h_modes.addWidget(self.radio_mode_diar)
         h_modes.addStretch()
         layout_mode.addLayout(h_modes)
@@ -228,6 +244,56 @@ class TabVoiceIsolation(QWidget):
         layout_clean.addLayout(h_checks_clean)
 
         layout_mode.addWidget(self.panel_clean)
+
+        # Panel de Opciones para Modo B: Selección Gráfica en Línea de Tiempo
+        self.panel_manual = QWidget()
+        layout_manual = QVBoxLayout(self.panel_manual)
+        layout_manual.setContentsMargins(0, 4, 0, 0)
+        layout_manual.setSpacing(8)
+
+        # Widget de Forma de Onda y Línea de Tiempo interactiva
+        self.timeline_widget = AudioSegmentSelectorWidget(self)
+        self.timeline_widget.play_requested.connect(self._on_timeline_play_requested)
+        self.timeline_widget.stop_requested.connect(self._on_timeline_stop_requested)
+        self.timeline_widget.seek_requested.connect(self._on_timeline_seek_requested)
+        self.timeline_widget.segments_updated.connect(lambda _: self._update_manual_command_preview())
+        layout_manual.addWidget(self.timeline_widget)
+
+        # Opciones de exportación para la selección manual
+        grid_manual = QGridLayout()
+        grid_manual.setSpacing(8)
+
+        lbl_manual_fmt = QLabel("Formato de Exportación:")
+        self.combo_manual_fmt = QComboBox()
+        self.combo_manual_fmt.addItem("WAV - 16-bit PCM (Calidad Estudio Sin Pérdida)", "wav_16")
+        self.combo_manual_fmt.addItem("WAV - 24-bit PCM (Estudio Alta Definición)", "wav_24")
+        self.combo_manual_fmt.addItem("MP3 - 320 kbps (Máxima Fidelidad MP3)", "mp3_320k")
+        self.combo_manual_fmt.addItem("FLAC (Comprimido Sin Pérdida)", "flac")
+        self.combo_manual_fmt.currentIndexChanged.connect(self._update_output_suggestion)
+        grid_manual.addWidget(lbl_manual_fmt, 0, 0)
+        grid_manual.addWidget(self.combo_manual_fmt, 0, 1)
+
+        layout_manual.addLayout(grid_manual)
+
+        h_checks_manual = QHBoxLayout()
+        self.chk_manual_cleanup = QCheckBox("Aplicar ecualización vocal y reducción de ruido a los tramos seleccionados")
+        self.chk_manual_cleanup.setChecked(True)
+        self.chk_manual_cleanup.stateChanged.connect(lambda _: self._update_manual_command_preview())
+        h_checks_manual.addWidget(self.chk_manual_cleanup)
+        h_checks_manual.addStretch()
+        layout_manual.addLayout(h_checks_manual)
+
+        lbl_manual_tips = QLabel(
+            "💡 Consejo: Haga clic y arrastre con el ratón sobre la onda de audio para dibujar tramos de voz. "
+            "Arrastre los bordes izquierdo/derecho para ajustar el inicio o fin con precisión, o use 'Quitar Selección' (Supr) "
+            "para eliminar risas o ruidos no deseados."
+        )
+        lbl_manual_tips.setStyleSheet("color: #94a3b8; font-size: 11px; font-style: italic;")
+        lbl_manual_tips.setWordWrap(True)
+        layout_manual.addWidget(lbl_manual_tips)
+
+        self.panel_manual.setVisible(False)
+        layout_mode.addWidget(self.panel_manual)
 
         # Panel de Opciones para Modo B: Diarización por Hablante
         self.panel_diar = QWidget()
@@ -385,14 +451,25 @@ class TabVoiceIsolation(QWidget):
 
     def _on_operation_mode_changed(self):
         is_clean = self.radio_mode_clean.isChecked()
+        is_manual = self.radio_mode_manual.isChecked()
+        is_diar = self.radio_mode_diar.isChecked()
+
         self.panel_clean.setVisible(is_clean)
-        self.panel_diar.setVisible(not is_clean)
+        self.panel_manual.setVisible(is_manual)
+        self.panel_diar.setVisible(is_diar)
 
         if is_clean:
             self.btn_run.setText(" Extraer y Limpiar Voz")
             self.btn_run.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
             self.output_selector.setVisible(True)
             self._update_output_suggestion()
+            self._update_command_preview()
+        elif is_manual:
+            self.btn_run.setText(" Exportar Tramos Seleccionados")
+            self.btn_run.setIcon(self.style().standardIcon(QStyle.SP_DialogSaveButton))
+            self.output_selector.setVisible(True)
+            self._update_output_suggestion()
+            self._update_manual_command_preview()
         else:
             self.btn_run.setText(" Analizar y Diarizar Hablantes")
             self.btn_run.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
@@ -412,10 +489,13 @@ class TabVoiceIsolation(QWidget):
         if not path or not os.path.isfile(path):
             self.lbl_info.setText("Duración: --:--:-- | Códec de audio: No cargado | Frecuencia: -- Hz")
             self.media_duration = 0.0
+            if hasattr(self, "timeline_widget"):
+                self.timeline_widget.canvas.set_media(0.0, None)
+                self.timeline_widget.set_segments([])
             self._update_command_preview()
             return
 
-        _, ffprobe_path = self.get_ffmpeg_paths()
+        ffmpeg_path, ffprobe_path = self.get_ffmpeg_paths()
         info = ffmpeg_core.get_media_info(path, ffprobe_path)
         self.media_duration = info.get("duration", 0.0)
 
@@ -428,6 +508,10 @@ class TabVoiceIsolation(QWidget):
         dur_fmt = ffmpeg_core.format_seconds_to_time_str(self.media_duration)
         self.lbl_info.setText(f"Duración: {dur_fmt} | Códec: {acodec}{sr}")
 
+        # Cargar forma de onda en la línea de tiempo interactiva
+        if hasattr(self, "timeline_widget") and ffmpeg_path:
+            self.timeline_widget.load_audio_file(ffmpeg_path, path, self.media_duration)
+
         self._update_output_suggestion()
         self._update_command_preview()
 
@@ -438,10 +522,14 @@ class TabVoiceIsolation(QWidget):
 
         p = Path(input_path)
         stem = p.stem
-        fmt = self.combo_clean_fmt.currentData() if hasattr(self, "combo_clean_fmt") else "wav_16"
-        ext = ".mp3" if "mp3" in fmt else (".flac" if fmt == "flac" else ".wav")
-
-        new_filename = f"{stem}_voz_limpia{ext}"
+        if self.radio_mode_manual.isChecked():
+            fmt = self.combo_manual_fmt.currentData() if hasattr(self, "combo_manual_fmt") else "wav_16"
+            ext = ".mp3" if "mp3" in fmt else (".flac" if fmt == "flac" else ".wav")
+            new_filename = f"{stem}_voz_seleccionada{ext}"
+        else:
+            fmt = self.combo_clean_fmt.currentData() if hasattr(self, "combo_clean_fmt") else "wav_16"
+            ext = ".mp3" if "mp3" in fmt else (".flac" if fmt == "flac" else ".wav")
+            new_filename = f"{stem}_voz_limpia{ext}"
 
         if self.radio_base_folder.isChecked():
             base_dir = config_manager.get_base_output_dir()
@@ -456,31 +544,60 @@ class TabVoiceIsolation(QWidget):
         self._update_command_preview()
 
     def _update_command_preview(self):
-        if not self.radio_mode_clean.isChecked():
-            return
+        if self.radio_mode_clean.isChecked():
+            input_path = self.input_selector.get_path()
+            out_path = self.output_selector.get_path()
+            if not input_path or not out_path:
+                self.cmd_preview.set_command("")
+                return
 
+            ffmpeg_path, _ = self.get_ffmpeg_paths()
+            profile = self.combo_profile.currentData()
+            fmt = self.combo_clean_fmt.currentData()
+            norm = self.chk_norm_speech.isChecked()
+            rem_sil = self.chk_remove_silence.isChecked()
+
+            cmd = ffmpeg_core.build_voice_isolation_command(
+                ffmpeg_path=ffmpeg_path or "ffmpeg",
+                input_file=input_path,
+                output_file=out_path,
+                profile=profile,
+                normalize_speech=norm,
+                remove_silence=rem_sil,
+                audio_format=fmt
+            )
+            self.cmd_preview.set_command(cmd)
+        elif self.radio_mode_manual.isChecked():
+            self._update_manual_command_preview()
+        else:
+            self.cmd_preview.set_command("Diarización con detección VAD acústica y clustering tímbrico en segundo plano.")
+
+    def _update_manual_command_preview(self):
+        if not self.radio_mode_manual.isChecked():
+            return
+        ffmpeg_path, _ = self.get_ffmpeg_paths()
         input_path = self.input_selector.get_path()
         out_path = self.output_selector.get_path()
-        if not input_path or not out_path:
-            self.cmd_preview.set_command("")
+        segs = self.timeline_widget.get_segments() if hasattr(self, "timeline_widget") else []
+        if not input_path or not segs:
+            self.cmd_preview.set_command("Seleccione un archivo y marque al menos un tramo de voz en la línea de tiempo gráfica.")
             return
 
-        ffmpeg_path, _ = self.get_ffmpeg_paths()
-        profile = self.combo_profile.currentData()
-        fmt = self.combo_clean_fmt.currentData()
-        norm = self.chk_norm_speech.isChecked()
-        rem_sil = self.chk_remove_silence.isChecked()
+        fmt = self.combo_manual_fmt.currentData() if hasattr(self, "combo_manual_fmt") else "wav_16"
+        cleanup = self.chk_manual_cleanup.isChecked() if hasattr(self, "chk_manual_cleanup") else True
 
-        cmd = ffmpeg_core.build_voice_isolation_command(
-            ffmpeg_path=ffmpeg_path or "ffmpeg",
-            input_file=input_path,
-            output_file=out_path,
-            profile=profile,
-            normalize_speech=norm,
-            remove_silence=rem_sil,
-            audio_format=fmt
-        )
-        self.cmd_preview.set_command(cmd)
+        try:
+            cmd = ffmpeg_core.build_stitch_segments_command(
+                ffmpeg_path=ffmpeg_path or "ffmpeg",
+                input_file=input_path,
+                segments=segs,
+                output_file=out_path or "salida.wav",
+                apply_cleanup=cleanup,
+                audio_format=fmt
+            )
+            self.cmd_preview.set_command(cmd)
+        except Exception as e:
+            self.cmd_preview.set_command(f"Error generando comando: {e}")
 
     def _on_run_clicked(self):
         input_path = self.input_selector.get_path()
@@ -495,8 +612,52 @@ class TabVoiceIsolation(QWidget):
 
         if self.radio_mode_clean.isChecked():
             self._run_voice_cleaning(ffmpeg_path)
+        elif self.radio_mode_manual.isChecked():
+            self._run_manual_segments(ffmpeg_path)
         else:
             self._run_speaker_diarization(ffmpeg_path, ffprobe_path)
+
+    def _run_manual_segments(self, ffmpeg_path: str):
+        segs = self.timeline_widget.get_segments()
+        if not segs:
+            QMessageBox.warning(self, "Sin segmentos", "Debe marcar al menos un tramo de audio en la línea de tiempo.")
+            return
+
+        out_path = self.output_selector.get_path()
+        if not out_path:
+            QMessageBox.warning(self, "Ruta de salida requerida", "Por favor especifique la ruta del archivo de salida.")
+            return
+
+        fmt = self.combo_manual_fmt.currentData()
+        cleanup = self.chk_manual_cleanup.isChecked()
+
+        cmd = ffmpeg_core.build_stitch_segments_command(
+            ffmpeg_path=ffmpeg_path,
+            input_file=self.input_selector.get_path(),
+            segments=segs,
+            output_file=out_path,
+            apply_cleanup=cleanup,
+            audio_format=fmt
+        )
+
+        self.output_actions.hide_output()
+        self.btn_run.setEnabled(False)
+        self.btn_cancel.setEnabled(True)
+        self.progress_bar.reset()
+        self.progress_bar.set_status("Exportando y procesando tramos seleccionados...")
+        self.log_console.clear_logs()
+
+        tot_dur = sum((en - st) for st, en in segs)
+        self.worker = FFmpegWorker(
+            command=cmd,
+            total_duration=tot_dur,
+            output_path=out_path,
+            parent=self
+        )
+        self.worker.progress_signal.connect(self._on_progress)
+        self.worker.log_signal.connect(self.log_console.append_log)
+        self.worker.finished_signal.connect(self._on_clean_finished)
+        self.worker.start()
 
     def _run_voice_cleaning(self, ffmpeg_path: str):
         out_path = self.output_selector.get_path()
@@ -617,16 +778,65 @@ class TabVoiceIsolation(QWidget):
                 on_play_sample_fn=self._play_speaker_sample,
                 on_export_sample_fn=self._export_speaker_sample,
                 on_export_full_fn=self._export_speaker_full,
+                on_edit_timeline_fn=self._edit_speaker_in_timeline,
                 parent=self.cards_container
             )
             self.speaker_cards[spk_id] = card
             self.layout_cards.addWidget(card)
+
+    def _edit_speaker_in_timeline(self, speaker_data: dict):
+        """Carga los segmentos del interlocutor en la línea de tiempo gráfica para revisión y ajuste manual."""
+        segs = speaker_data.get("segments", [])
+        if not segs:
+            QMessageBox.information(self, "Sin segmentos", "No hay intervenciones registradas para este hablante.")
+            return
+
+        self.timeline_widget.set_segments(segs)
+        self.radio_mode_manual.setChecked(True)
+        spk_name = speaker_data.get("name", "Hablante")
+        self.progress_bar.set_status(f"Tramos de {spk_name} cargados en la Línea de Tiempo. Puede escuchar, ajustar bordes o borrar tramos no deseados.")
+
+    def _on_timeline_play_requested(self, start_sec: float, end_sec: float):
+        input_path = self.input_selector.get_path()
+        if not input_path or not os.path.isfile(input_path):
+            self.timeline_widget.set_playing_state(False)
+            return
+
+        try:
+            self._timeline_stop_ms = int(end_sec * 1000)
+            self.player.stop()
+            content = QMediaContent(QUrl.fromLocalFile(input_path))
+            self.player.setMedia(content)
+            self.player.setPosition(int(start_sec * 1000))
+            self.player.play()
+            self.current_playing_spk_id = None
+            self._update_speaker_cards_playing_state()
+        except Exception:
+            self.timeline_widget.set_playing_state(False)
+
+    def _on_timeline_stop_requested(self):
+        self.player.stop()
+        self.timeline_widget.set_playing_state(False)
+        self._timeline_stop_ms = None
+
+    def _on_timeline_seek_requested(self, sec: float):
+        self.player.setPosition(int(sec * 1000))
+
+    def _on_player_position_changed(self, pos_ms: int):
+        if self.radio_mode_manual.isChecked():
+            self.timeline_widget.set_playhead_pos(pos_ms / 1000.0)
+            if hasattr(self, "_timeline_stop_ms") and self._timeline_stop_ms is not None and pos_ms >= self._timeline_stop_ms:
+                self.player.stop()
+                self.timeline_widget.set_playing_state(False)
+                self._timeline_stop_ms = None
 
     def _on_player_state_changed(self, state):
         """Maneja el fin o cambio de estado de la reproducción de audio."""
         if state != QMediaPlayer.PlayingState:
             self.current_playing_spk_id = None
             self._update_speaker_cards_playing_state()
+            if hasattr(self, "timeline_widget"):
+                self.timeline_widget.set_playing_state(False)
 
     def _update_speaker_cards_playing_state(self):
         """Sincroniza el botón de reproducir/detener en todas las tarjetas de interlocutor."""

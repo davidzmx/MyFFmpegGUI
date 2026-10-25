@@ -1516,14 +1516,57 @@ class TestFFmpegSuite(unittest.TestCase):
         voice_tab = win.tab_voice
         self.assertIsNotNone(voice_tab)
 
-        # Probar cambio de modo en UI
+        # Probar cambio de modos en UI (Limpieza, Diarización y Manual)
         voice_tab.radio_mode_diar.setChecked(True)
         self.assertFalse(voice_tab.panel_diar.isHidden())
         self.assertTrue(voice_tab.panel_clean.isHidden())
+        self.assertTrue(voice_tab.panel_manual.isHidden())
+
+        voice_tab.radio_mode_manual.setChecked(True)
+        self.assertFalse(voice_tab.panel_manual.isHidden())
+        self.assertTrue(voice_tab.panel_clean.isHidden())
+        self.assertTrue(voice_tab.panel_diar.isHidden())
 
         voice_tab.radio_mode_clean.setChecked(True)
         self.assertFalse(voice_tab.panel_clean.isHidden())
         self.assertTrue(voice_tab.panel_diar.isHidden())
+        self.assertTrue(voice_tab.panel_manual.isHidden())
+
+        # 7. Línea de tiempo gráfica interactiva y selector de segmentos de voz
+        from ui.timeline_waveform import AudioTimelineCanvas, AudioSegmentSelectorWidget, format_seconds_exact
+        self.assertEqual(format_seconds_exact(75.5), "01:15.50")
+        self.assertEqual(format_seconds_exact(0.0), "00:00.00")
+
+        canvas = AudioTimelineCanvas()
+        canvas.set_media(10.0, np.zeros(100, dtype=np.float32))
+        canvas.set_segments([(1.0, 3.5), (6.0, 8.5)])
+        self.assertEqual(len(canvas.segments), 2)
+        self.assertEqual(canvas.get_selected_segment(), (1.0, 3.5))
+
+        # Borrar segmento seleccionado
+        canvas.delete_selected_segment()
+        self.assertEqual(len(canvas.segments), 1)
+        self.assertEqual(canvas.segments[0], (6.0, 8.5))
+
+        # Limpiar todo
+        canvas.clear_all_segments()
+        self.assertEqual(len(canvas.segments), 0)
+
+        # Probar interacción con el widget contenedor y carga desde tarjeta de hablante
+        timeline_widget = voice_tab.timeline_widget
+        timeline_widget.set_segments([(2.0, 5.0), (7.0, 9.0)])
+        self.assertEqual(len(timeline_widget.get_segments()), 2)
+
+        mock_spk_data = {
+            "id": 1,
+            "name": "Hablante 1",
+            "segments": [(0.5, 2.5), (4.0, 6.2)],
+            "segment_count": 2,
+            "total_duration_fmt": "00:04"
+        }
+        voice_tab._edit_speaker_in_timeline(mock_spk_data)
+        self.assertTrue(voice_tab.radio_mode_manual.isChecked())
+        self.assertEqual(timeline_widget.get_segments(), [(0.5, 2.5), (4.0, 6.2)])
 
         win.close()
 
