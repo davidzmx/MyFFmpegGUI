@@ -253,7 +253,9 @@ class TabVoiceIsolation(QWidget):
 
         # Widget de Forma de Onda y Línea de Tiempo interactiva
         self.timeline_widget = AudioSegmentSelectorWidget(self)
-        self.timeline_widget.play_requested.connect(self._on_timeline_play_requested)
+        self.timeline_widget.play_normal_requested.connect(self._on_timeline_play_normal_requested)
+        self.timeline_widget.play_selection_requested.connect(self._on_timeline_play_selection_requested)
+        self.timeline_widget.play_requested.connect(self._on_timeline_play_selection_requested)
         self.timeline_widget.stop_requested.connect(self._on_timeline_stop_requested)
         self.timeline_widget.seek_requested.connect(self._on_timeline_seek_requested)
         self.timeline_widget.segments_updated.connect(lambda _: self._update_manual_command_preview())
@@ -796,7 +798,29 @@ class TabVoiceIsolation(QWidget):
         spk_name = speaker_data.get("name", "Hablante")
         self.progress_bar.set_status(f"Tramos de {spk_name} cargados en la Línea de Tiempo. Puede escuchar, ajustar bordes o borrar tramos no deseados.")
 
-    def _on_timeline_play_requested(self, start_sec: float, end_sec: float):
+    def _on_timeline_play_normal_requested(self, start_sec: float):
+        """Reproduce normalmente a partir de donde esté el marcador rojo (playhead)."""
+        input_path = self.input_selector.get_path()
+        if not input_path or not os.path.isfile(input_path):
+            self.timeline_widget.set_playing_state(False)
+            return
+
+        try:
+            self._timeline_stop_ms = None  # Reproducción continua normal: sin límite de fin
+            self.player.stop()
+            content = QMediaContent(QUrl.fromLocalFile(input_path))
+            self.player.setMedia(content)
+            self.player.setPosition(int(start_sec * 1000))
+            self.player.play()
+            self.current_playing_spk_id = None
+            self._update_speaker_cards_playing_state()
+            self.timeline_widget.set_playing_state(True, mode="normal")
+            self.progress_bar.set_status("Reproduciendo audio normalmente...")
+        except Exception:
+            self.timeline_widget.set_playing_state(False)
+
+    def _on_timeline_play_selection_requested(self, start_sec: float, end_sec: float):
+        """Reproduce únicamente el tramo seleccionado y se detiene automáticamente al terminar."""
         input_path = self.input_selector.get_path()
         if not input_path or not os.path.isfile(input_path):
             self.timeline_widget.set_playing_state(False)
@@ -811,13 +835,19 @@ class TabVoiceIsolation(QWidget):
             self.player.play()
             self.current_playing_spk_id = None
             self._update_speaker_cards_playing_state()
+            self.timeline_widget.set_playing_state(True, mode="selection")
+            self.progress_bar.set_status(f"Reproduciendo selección ({end_sec - start_sec:.2f}s)...")
         except Exception:
             self.timeline_widget.set_playing_state(False)
+
+    def _on_timeline_play_requested(self, start_sec: float, end_sec: float):
+        self._on_timeline_play_selection_requested(start_sec, end_sec)
 
     def _on_timeline_stop_requested(self):
         self.player.stop()
         self.timeline_widget.set_playing_state(False)
         self._timeline_stop_ms = None
+        self.progress_bar.set_status("Reproducción detenida.")
 
     def _on_timeline_seek_requested(self, sec: float):
         self.player.setPosition(int(sec * 1000))

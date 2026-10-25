@@ -1568,6 +1568,17 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertTrue(voice_tab.radio_mode_manual.isChecked())
         self.assertEqual(timeline_widget.get_segments(), [(0.5, 2.5), (4.0, 6.2)])
 
+        # Probar botones de reproducción normal y selección
+        self.assertIsNotNone(timeline_widget.btn_play_normal)
+        self.assertIsNotNone(timeline_widget.btn_play_seg)
+        timeline_widget.set_playing_state(True, mode="normal")
+        self.assertEqual(timeline_widget.btn_play_normal.text(), " Detener")
+        timeline_widget.set_playing_state(True, mode="selection")
+        self.assertEqual(timeline_widget.btn_play_seg.text(), " Detener")
+        timeline_widget.set_playing_state(False)
+        self.assertEqual(timeline_widget.btn_play_normal.text(), " Reproducir")
+        self.assertEqual(timeline_widget.btn_play_seg.text(), " Reproducir Selección")
+
         win.close()
 
 

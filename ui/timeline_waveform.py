@@ -322,6 +322,9 @@ class AudioTimelineCanvas(QWidget):
             self.segment_selected.emit(self.selected_idx, new_st, new_en)
 
     def mouseReleaseEvent(self, event):
+        x = event.pos().x()
+        t = self._x_to_time(x)
+
         if self._drag_mode == 'create' and self._orig_seg:
             st, en = self._orig_seg
             if en - st >= 0.35:
@@ -330,9 +333,21 @@ class AudioTimelineCanvas(QWidget):
                 self.selected_idx = self.segments.index((round(st, 2), round(en, 2)))
                 self.segments_changed.emit(self.segments)
                 self.segment_selected.emit(self.selected_idx, st, en)
+            else:
+                # Clic sin arrastre suficiente: mover la aguja roja a este punto
+                self.seek_requested.emit(t)
+                self.set_playhead(t)
             self._orig_seg = None
 
-        elif self._drag_mode in ('resize_left', 'resize_right', 'move'):
+        elif self._drag_mode == 'move':
+            # Si solo fue un clic sin arrastre (< 4px), mover la aguja roja a este punto
+            if abs(x - self._drag_start_x) < 4:
+                self.seek_requested.emit(t)
+                self.set_playhead(t)
+            self.segments.sort(key=lambda s: s[0])
+            self.segments_changed.emit(self.segments)
+
+        elif self._drag_mode in ('resize_left', 'resize_right'):
             self.segments.sort(key=lambda s: s[0])
             self.segments_changed.emit(self.segments)
 
@@ -402,24 +417,25 @@ class AudioTimelineCanvas(QWidget):
                     QColor("#1e3a8a")
                 )
 
-        # 4. Dibujar Segmentos Seleccionados
+        # 4. Dibujar Segmentos Seleccionados (Siempre translúcidos sobre la onda)
         for idx, (st, en) in enumerate(self.segments):
             x1 = self._time_to_x(st)
             x2 = self._time_to_x(en)
             seg_w = max(4.0, x2 - x1)
             is_active = (idx == self.selected_idx)
 
-            # Fondo del bloque de voz
+            # Fondo del bloque de voz (Translúcido para que la onda de audio sea siempre visible)
             rect = QRectF(x1, ruler_h + 2.0, seg_w, wave_h - 4.0)
-            fill_color = QColor(14, 165, 233, 90) if is_active else QColor(56, 189, 248, 45)
+            fill_color = QColor(14, 165, 233, 75) if is_active else QColor(56, 189, 248, 38)
             painter.fillRect(rect, fill_color)
 
-            # Borde exterior
+            # Borde exterior (Asegurar NoBrush para que drawRoundedRect NO rellene con pincel previo)
             border_pen = QPen(
                 QColor("#38bdf8") if is_active else QColor("#0284c7"),
                 2.0 if is_active else 1.2
             )
             painter.setPen(border_pen)
+            painter.setBrush(Qt.NoBrush)
             painter.drawRoundedRect(rect, 4.0, 4.0)
 
             # Manijas laterales de redimensionamiento (Grip Handles)
@@ -431,6 +447,9 @@ class AudioTimelineCanvas(QWidget):
             painter.drawRoundedRect(QRectF(x1, center_y - 12, 4.0, 24.0), 2.0, 2.0)
             # Asa derecha
             painter.drawRoundedRect(QRectF(x2 - 4.0, center_y - 12, 4.0, 24.0), 2.0, 2.0)
+
+            # Resetear pincel a NoBrush inmediatamente para la siguiente iteración
+            painter.setBrush(Qt.NoBrush)
 
             # Etiqueta de tiempo del segmento
             painter.setFont(QFont("Segoe UI", 8, QFont.Bold if is_active else QFont.Normal))
@@ -446,6 +465,7 @@ class AudioTimelineCanvas(QWidget):
             c_rect = QRectF(cx1, ruler_h + 2.0, max(2.0, cx2 - cx1), wave_h - 4.0)
             painter.fillRect(c_rect, QColor(245, 158, 11, 70))
             painter.setPen(QPen(QColor("#f59e0b"), 1.5, Qt.DashLine))
+            painter.setBrush(Qt.NoBrush)
             painter.drawRect(c_rect)
 
         # 5. Aguja de Reproducción (Playhead)
@@ -466,12 +486,14 @@ class AudioTimelineCanvas(QWidget):
 class AudioSegmentSelectorWidget(QWidget):
     """
     Contenedor completo que incluye el lienzo interactivo de la forma de onda,
-    barra de transporte, controles de reproducción por tramo, borrado y resumen de tiempos.
+    barra de transporte, controles de reproducción normal y por tramo, borrado y resumen de tiempos.
     """
     segments_updated = pyqtSignal(list)
-    play_requested = pyqtSignal(float, float) # (start_sec, end_sec)
+    play_normal_requested = pyqtSignal(float)           # start_sec (hasta el final del archivo)
+    play_selection_requested = pyqtSignal(float, float) # (start_sec, end_sec)
+    play_requested = pyqtSignal(float, float)           # compatibilidad hacia atrás
     stop_requested = pyqtSignal()
-    seek_requested = pyqtSignal(float)        # time in seconds
+    seek_requested = pyqtSignal(float)                  # time in seconds
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -481,7 +503,8 @@ class AudioSegmentSelectorWidget(QWidget):
 
         # 1. Cabecera explicativa
         self.lbl_guide = QLabel(
-            "✂️ <b>Selector Gráfico de Voz:</b> Haz clic y arrastra con el ratón sobre la onda para marcar o recortar tramos de habla. Arrastra los bordes para ajustar con precisión."
+            "✂️ <b>Selector Gráfico de Voz:</b> Haz clic en la regla o sobre la onda para mover el marcador rojo. "
+            "Arrastra con el ratón sobre la onda para marcar o recortar tramos de habla. Arrastra los bordes para ajustar con precisión."
         )
         self.lbl_guide.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout.addWidget(self.lbl_guide)
@@ -499,19 +522,28 @@ class AudioSegmentSelectorWidget(QWidget):
 
         style = self.style()
 
-        # Botón Reproducir Tramo Seleccionado
-        self.btn_play_seg = QPushButton(" Reproducir Selección")
-        self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
-        self.btn_play_seg.setStyleSheet("padding: 3px 8px; font-weight: 500;")
-        self.btn_play_seg.clicked.connect(self._on_play_clicked)
+        # Botón 1: Reproducir normalmente desde el marcador rojo
+        self.btn_play_normal = QPushButton(" Reproducir")
+        self.btn_play_normal.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+        self.btn_play_normal.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+        self.btn_play_normal.setToolTip("Reproduce el audio normalmente a partir de donde esté el marcador rojo.")
+        self.btn_play_normal.clicked.connect(self._on_play_normal_clicked)
 
-        # Botón Eliminar Segmento
+        # Botón 2: Reproducir únicamente la selección
+        self.btn_play_seg = QPushButton(" Reproducir Selección")
+        self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaSeekForward))
+        self.btn_play_seg.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+        self.btn_play_seg.setToolTip("Reproduce únicamente el tramo o selección de voz marcado.")
+        self.btn_play_seg.clicked.connect(self._on_play_selection_clicked)
+
+        # Botón 3: Eliminar Segmento
         self.btn_del_seg = QPushButton(" Quitar Selección")
         self.btn_del_seg.setIcon(style.standardIcon(QStyle.SP_TrashIcon))
         self.btn_del_seg.setStyleSheet("padding: 3px 8px;")
+        self.btn_del_seg.setToolTip("Elimina el tramo de audio actualmente seleccionado (tecla Supr).")
         self.btn_del_seg.clicked.connect(self.canvas.delete_selected_segment)
 
-        # Botón Limpiar Todos
+        # Botón 4: Limpiar Todos
         self.btn_clear_all = QPushButton(" Limpiar Todo")
         self.btn_clear_all.setIcon(style.standardIcon(QStyle.SP_DialogResetButton))
         self.btn_clear_all.setStyleSheet("padding: 3px 8px;")
@@ -521,6 +553,7 @@ class AudioSegmentSelectorWidget(QWidget):
         self.lbl_info = QLabel("Seleccione o dibuje un tramo de audio.")
         self.lbl_info.setStyleSheet("color: #38bdf8; font-weight: 500; font-size: 11px;")
 
+        h_tools.addWidget(self.btn_play_normal)
         h_tools.addWidget(self.btn_play_seg)
         h_tools.addWidget(self.btn_del_seg)
         h_tools.addWidget(self.btn_clear_all)
@@ -531,6 +564,7 @@ class AudioSegmentSelectorWidget(QWidget):
         layout.addLayout(h_tools)
 
         self.is_playing = False
+        self.playing_mode = None  # 'normal' o 'selection'
 
     def load_audio_file(self, ffmpeg_path: str, media_file: str, duration: float):
         """Carga el audio y calcula la forma de onda visual."""
@@ -547,37 +581,81 @@ class AudioSegmentSelectorWidget(QWidget):
     def set_playhead_pos(self, seconds: float):
         self.canvas.set_playhead(seconds)
 
-    def set_playing_state(self, playing: bool):
+    def set_playing_state(self, playing: bool, mode: str = "selection"):
         self.is_playing = playing
+        self.playing_mode = mode if playing else None
         style = self.style()
-        if playing:
-            self.btn_play_seg.setText(" Detener")
-            self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaStop))
-            self.btn_play_seg.setStyleSheet("padding: 3px 8px; font-weight: bold; background-color: #dc2626; color: white;")
-        else:
-            self.btn_play_seg.setText(" Reproducir Selección")
-            self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
-            self.btn_play_seg.setStyleSheet("padding: 3px 8px; font-weight: 500;")
 
-    def _on_play_clicked(self):
-        if self.is_playing:
+        if playing:
+            if mode == "normal":
+                self.btn_play_normal.setText(" Detener")
+                self.btn_play_normal.setIcon(style.standardIcon(QStyle.SP_MediaStop))
+                self.btn_play_normal.setStyleSheet("padding: 3px 10px; font-weight: bold; background-color: #dc2626; color: white;")
+
+                self.btn_play_seg.setText(" Reproducir Selección")
+                self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaSeekForward))
+                self.btn_play_seg.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+            else:
+                self.btn_play_seg.setText(" Detener")
+                self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaStop))
+                self.btn_play_seg.setStyleSheet("padding: 3px 10px; font-weight: bold; background-color: #dc2626; color: white;")
+
+                self.btn_play_normal.setText(" Reproducir")
+                self.btn_play_normal.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+                self.btn_play_normal.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+        else:
+            self.btn_play_normal.setText(" Reproducir")
+            self.btn_play_normal.setIcon(style.standardIcon(QStyle.SP_MediaPlay))
+            self.btn_play_normal.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+
+            self.btn_play_seg.setText(" Reproducir Selección")
+            self.btn_play_seg.setIcon(style.standardIcon(QStyle.SP_MediaSeekForward))
+            self.btn_play_seg.setStyleSheet("padding: 3px 10px; font-weight: 500;")
+
+    def _on_play_normal_clicked(self):
+        """Reproduce normalmente a partir de donde esté el marcador rojo."""
+        if self.is_playing and self.playing_mode == "normal":
             self.stop_requested.emit()
             self.set_playing_state(False)
             return
 
+        if self.is_playing:
+            self.stop_requested.emit()
+
+        st = self.canvas.playhead_pos
+        self.play_normal_requested.emit(st)
+        self.set_playing_state(True, mode="normal")
+
+    def _on_play_selection_clicked(self):
+        """Reproduce únicamente el tramo o selección activa."""
+        if self.is_playing and self.playing_mode == "selection":
+            self.stop_requested.emit()
+            self.set_playing_state(False)
+            return
+
+        if self.is_playing:
+            self.stop_requested.emit()
+
         seg = self.canvas.get_selected_segment()
         if seg:
             st, en = seg
+            self.play_selection_requested.emit(st, en)
             self.play_requested.emit(st, en)
-            self.set_playing_state(True)
+            self.set_playing_state(True, mode="selection")
         elif self.canvas.segments:
             st, en = self.canvas.segments[0]
+            self.play_selection_requested.emit(st, en)
             self.play_requested.emit(st, en)
-            self.set_playing_state(True)
+            self.set_playing_state(True, mode="selection")
         else:
-            # Reproducir desde inicio
-            self.play_requested.emit(0.0, self.canvas.total_duration)
-            self.set_playing_state(True)
+            # Si no hay selección, reproducir desde el marcador rojo
+            st = self.canvas.playhead_pos
+            self.play_normal_requested.emit(st)
+            self.set_playing_state(True, mode="normal")
+
+    # Método de compatibilidad hacia atrás
+    def _on_play_clicked(self):
+        self._on_play_selection_clicked()
 
     def _on_segment_selected(self, idx: int, st: float, en: float):
         self._update_info_label()

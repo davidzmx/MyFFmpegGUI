@@ -34,7 +34,7 @@ class DiarizationWorker(QThread):
         ffprobe_path: Optional[str],
         input_file: str,
         num_speakers: Optional[int] = None,
-        noise_threshold_db: float = -28.0,
+        noise_threshold_db: float = -32.0,
         min_silence_duration: float = 0.35,
         parent=None
     ):
@@ -133,7 +133,12 @@ class DiarizationWorker(QThread):
                 return
 
             stderr_silence_str = err_silence.decode("utf-8", errors="replace")
-            speech_segments = ffmpeg_core.parse_silence_detect_output(stderr_silence_str, total_duration)
+            speech_segments = ffmpeg_core.parse_silence_detect_output(
+                stderr_silence_str,
+                total_duration,
+                pad_start_sec=0.08,
+                pad_end_sec=0.25
+            )
 
             if not speech_segments and total_duration > 0:
                 speech_segments = [(0.0, round(total_duration, 3))]

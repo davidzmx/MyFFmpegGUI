@@ -1382,7 +1382,9 @@ def build_silence_detect_command(
 def parse_silence_detect_output(
     stderr_text: str,
     total_duration: float = 0.0,
-    min_speech_sec: float = 0.35
+    min_speech_sec: float = 0.35,
+    pad_start_sec: float = 0.0,
+    pad_end_sec: float = 0.0
 ) -> List[Tuple[float, float]]:
     """
     Analiza la salida de silencedetect e invierte los silencios para obtener
@@ -1449,13 +1451,20 @@ def parse_silence_detect_output(
         if s_start > current_time:
             seg_len = s_start - current_time
             if seg_len >= min_speech_sec:
-                speech_segments.append((round(current_time, 3), round(s_start, 3)))
+                seg_st = max(0.0, current_time - pad_start_sec)
+                seg_en = s_start + pad_end_sec
+                if s_end > s_start:
+                    seg_en = min(seg_en, s_start + (s_end - s_start) * 0.75, s_end)
+                if total_duration > 0.0:
+                    seg_en = min(total_duration, seg_en)
+                speech_segments.append((round(seg_st, 3), round(seg_en, 3)))
         current_time = max(current_time, s_end)
 
     if total_duration > current_time:
         rem_len = total_duration - current_time
         if rem_len >= min_speech_sec:
-            speech_segments.append((round(current_time, 3), round(total_duration, 3)))
+            seg_st = max(0.0, current_time - pad_start_sec)
+            speech_segments.append((round(seg_st, 3), round(total_duration, 3)))
 
     return speech_segments
 
@@ -1482,7 +1491,7 @@ def build_stitch_segments_command(
         st, en = segments[0]
         cmd.extend(["-ss", f"{st:.3f}", "-to", f"{en:.3f}"])
         if apply_cleanup:
-            cmd.extend(["-af", "highpass=f=80,lowpass=f=12000,afftdn=nf=-24:tn=1,speechnorm=e=4:r=0.0001:l=1"])
+            cmd.extend(["-af", "highpass=f=80,lowpass=f=12000,afftdn=nr=12:nf=-45:tn=1,speechnorm=e=4:r=0.0001:l=1"])
     else:
         # Caso 2: Múltiples segmentos unidos mediante atrim y concat
         v_parts = []
@@ -1496,7 +1505,7 @@ def build_stitch_segments_command(
             concat_filter = (
                 ";".join(v_parts) +
                 f";{cat_inputs}concat=n={n_inputs}:v=0:a=1[araw];"
-                "[araw]highpass=f=80,lowpass=f=12000,afftdn=nf=-24:tn=1,speechnorm=e=4:r=0.0001:l=1[aout]"
+                "[araw]highpass=f=80,lowpass=f=12000,afftdn=nr=12:nf=-45:tn=1,speechnorm=e=4:r=0.0001:l=1[aout]"
             )
         else:
             concat_filter = ";".join(v_parts) + f";{cat_inputs}concat=n={n_inputs}:v=0:a=1[aout]"
