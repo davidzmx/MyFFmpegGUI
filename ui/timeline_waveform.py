@@ -3,18 +3,19 @@
 """
 Audio Timeline Waveform Selector Widget
 Componente gráfico interactivo para visualización de forma de onda y selección manual/ajuste
-de segmentos de voz mediante arrastre con el ratón, manijas de tiempo y reproducción integrada.
+de segmentos de voz mediante arrastre con el ratón, zoom de onda, desplazamiento y marcador de reproducción arrastrable.
 """
 
 import os
 import sys
+import math
 import subprocess
 from typing import List, Tuple, Optional
 import numpy as np
 
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QFrame, QStyle, QSizePolicy, QToolTip, QShortcut
+    QFrame, QStyle, QSizePolicy, QToolTip, QShortcut, QScrollBar
 )
 from PyQt5.QtGui import (
     QPainter, QColor, QPen, QBrush, QFont, QCursor,
@@ -41,7 +42,7 @@ def format_seconds_exact(sec: float) -> str:
     return f"{m:02d}:{int_s:02d}.{cents:02d}"
 
 
-def extract_waveform_peaks(ffmpeg_path: str, input_file: str, num_peaks: int = 800) -> np.ndarray:
+def extract_waveform_peaks(ffmpeg_path: str, input_file: str, num_peaks: int = 2400) -> np.ndarray:
     """
     Extrae la envolvente de picos de amplitud (waveform) de forma ultra rápida
     mediante una tubería (pipe) directa de FFmpeg sin crear archivos temporales en disco.
@@ -95,17 +96,18 @@ def extract_waveform_peaks(ffmpeg_path: str, input_file: str, num_peaks: int = 8
 class AudioTimelineCanvas(QWidget):
     """
     Lienzo interactivo que dibuja la onda de audio real y permite crear, seleccionar,
-    mover y redimensionar segmentos de tiempo arrastrando con el ratón.
+    mover y redimensionar segmentos de tiempo, hacer zoom temporal y arrastrar el marcador playhead.
     """
     segment_selected = pyqtSignal(int, float, float) # (index, start_sec, end_sec)
     segments_changed = pyqtSignal(list)              # [(st, en), ...]
     seek_requested = pyqtSignal(float)               # time in seconds
+    view_changed = pyqtSignal(float, float)          # (view_start, zoom_level)
 
     HANDLE_WIDTH = 8
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(125)
+        self.setMinimumHeight(130)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -116,8 +118,12 @@ class AudioTimelineCanvas(QWidget):
         self.selected_idx: int = -1
         self.playhead_pos: float = 0.0
 
+        # Zoom y ventana visible
+        self.zoom_level: float = 1.0
+        self.view_start: float = 0.0
+
         # Estados de interacción con el ratón
-        self._drag_mode: Optional[str] = None  # 'create', 'resize_left', 'resize_right', 'move'
+        self._drag_mode: Optional[str] = None  # 'create', 'resize_left', 'resize_right', 'move', 'playhead'
         self._drag_start_x: float = 0.0
         self._drag_start_time: float = 0.0
         self._orig_seg: Optional[Tuple[float, float]] = None
@@ -129,7 +135,10 @@ class AudioTimelineCanvas(QWidget):
         self.total_duration = max(0.1, duration)
         self.waveform_peaks = waveform_peaks
         self.playhead_pos = 0.0
+        self.zoom_level = 1.0
+        self.view_start = 0.0
         self.update()
+        self.view_changed.emit(self.view_start, self.zoom_level)
 
     def set_segments(self, segments: List[Tuple[float, float]]):
         """Asigna la lista de segmentos activos [(inicio, fin), ...]."""
@@ -157,7 +166,56 @@ class AudioTimelineCanvas(QWidget):
     def set_playhead(self, seconds: float):
         """Actualiza la aguja de reproducción visual."""
         self.playhead_pos = max(0.0, min(self.total_duration, seconds))
+        # Si se reproduce con zoom activo y el playhead avanza más allá del borde derecho visible
+        if self.zoom_level > 1.0:
+            vis_dur = max(0.001, self.total_duration / self.zoom_level)
+            if self.playhead_pos > self.view_start + vis_dur:
+                self.set_view_start(self.playhead_pos - (vis_dur * 0.15))
+            elif self.playhead_pos < self.view_start:
+                self.set_view_start(self.playhead_pos)
         self.update()
+
+    def set_zoom(self, zoom: float, center_time: Optional[float] = None):
+        """Ajusta el nivel de zoom (1.0x a 20.0x) manteniendo el punto de enfoque temporal."""
+        old_zoom = self.zoom_level
+        new_zoom = max(1.0, min(20.0, float(zoom)))
+        if self.total_duration <= 0:
+            self.zoom_level = new_zoom
+            self.view_start = 0.0
+            self.update()
+            self.view_changed.emit(self.view_start, self.zoom_level)
+            return
+
+        old_vis_dur = max(0.001, self.total_duration / old_zoom)
+        new_vis_dur = max(0.001, self.total_duration / new_zoom)
+
+        if center_time is None:
+            center_time = self.view_start + (old_vis_dur / 2.0)
+
+        center_time = max(0.0, min(self.total_duration, center_time))
+        rel_pos = (center_time - self.view_start) / old_vis_dur if old_vis_dur > 0 else 0.5
+        rel_pos = max(0.0, min(1.0, rel_pos))
+        new_start = center_time - (rel_pos * new_vis_dur)
+
+        self.zoom_level = new_zoom
+        self.set_view_start(new_start)
+
+    def set_view_start(self, start_sec: float):
+        """Desplaza horizontalmente la ventana de tiempo visible."""
+        vis_dur = max(0.001, self.total_duration / self.zoom_level)
+        max_start = max(0.0, self.total_duration - vis_dur)
+        self.view_start = max(0.0, min(max_start, float(start_sec)))
+        self.update()
+        self.view_changed.emit(self.view_start, self.zoom_level)
+
+    def zoom_in(self):
+        self.set_zoom(self.zoom_level * 1.35)
+
+    def zoom_out(self):
+        self.set_zoom(self.zoom_level / 1.35)
+
+    def reset_zoom(self):
+        self.set_zoom(1.0, center_time=0.0)
 
     def get_selected_segment(self) -> Optional[Tuple[float, float]]:
         if 0 <= self.selected_idx < len(self.segments):
@@ -194,17 +252,41 @@ class AudioTimelineCanvas(QWidget):
         self.segments_changed.emit([])
         self.segment_selected.emit(-1, 0.0, 0.0)
 
-    # Coordenadas X <-> Segundos
+    # Coordenadas X <-> Segundos con soporte de Zoom
     def _time_to_x(self, t: float) -> float:
-        if self.total_duration <= 0:
+        if self.total_duration <= 0 or self.width() <= 0:
             return 0.0
-        return (t / self.total_duration) * self.width()
+        vis_dur = max(0.001, self.total_duration / self.zoom_level)
+        return ((t - self.view_start) / vis_dur) * float(self.width())
 
     def _x_to_time(self, x: float) -> float:
-        if self.width() <= 0:
+        if self.total_duration <= 0 or self.width() <= 0:
             return 0.0
-        ratio = max(0.0, min(1.0, x / float(self.width())))
-        return ratio * self.total_duration
+        vis_dur = max(0.001, self.total_duration / self.zoom_level)
+        ratio = x / float(self.width())
+        t = self.view_start + (ratio * vis_dur)
+        return max(0.0, min(self.total_duration, t))
+
+    # Eventos de Rueda de Ratón (Zoom con Ctrl, Pan horizontal sin Ctrl)
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        modifiers = event.modifiers()
+        if modifiers & Qt.ControlModifier:
+            # Zoom enfocado en la posición actual del cursor
+            mouse_x = event.pos().x()
+            mouse_t = self._x_to_time(mouse_x)
+            factor = 1.25 if delta > 0 else 0.8
+            self.set_zoom(self.zoom_level * factor, center_time=mouse_t)
+            event.accept()
+        else:
+            # Desplazamiento horizontal (pan) cuando hay zoom activo
+            if self.zoom_level > 1.0:
+                vis_dur = max(0.001, self.total_duration / self.zoom_level)
+                pan_step = vis_dur * 0.12 * (-1 if delta > 0 else 1)
+                self.set_view_start(self.view_start + pan_step)
+                event.accept()
+            else:
+                super().wheelEvent(event)
 
     # Eventos de Ratón
     def mousePressEvent(self, event):
@@ -212,11 +294,29 @@ class AudioTimelineCanvas(QWidget):
             return
 
         x = event.pos().x()
+        y = event.pos().y()
         t = self._x_to_time(x)
+        px = self._time_to_x(self.playhead_pos)
+
         self._drag_start_x = x
         self._drag_start_time = t
 
-        # Comprobar si se hace clic sobre un asa o segmento existente
+        # 1. Clic en la regla superior (donde está el triángulo rojo del marcador)
+        if y <= 24:
+            if abs(x - px) <= 12:
+                # Agarre directo sobre el triángulo rojo
+                self._drag_mode = 'playhead'
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                # Clic en cualquier otro punto de la regla: mueve la posición y permite arrastrarlo
+                self.set_playhead(t)
+                self.seek_requested.emit(t)
+                self._drag_mode = 'playhead'
+                self.setCursor(Qt.SizeHorCursor)
+            self.update()
+            return
+
+        # 2. Comprobar si se hace clic sobre un asa o segmento existente
         clicked_mode = None
         clicked_idx = -1
 
@@ -245,23 +345,34 @@ class AudioTimelineCanvas(QWidget):
             self.segment_selected.emit(clicked_idx, st, en)
             self.update()
         else:
-            # Clic en zona vacía: si es en la regla superior (y < 22), hacer seek
-            if event.pos().y() <= 22:
-                self.seek_requested.emit(t)
-                self.set_playhead(t)
-            else:
-                # Iniciar creación de un nuevo segmento arrastrando
-                self._drag_mode = 'create'
-                self.selected_idx = -1
-                self._orig_seg = (t, t)
-                self.update()
+            # Clic en zona vacía: iniciar creación de nuevo segmento arrastrando
+            self._drag_mode = 'create'
+            self.selected_idx = -1
+            self._orig_seg = (t, t)
+            self.update()
 
     def mouseMoveEvent(self, event):
         x = event.pos().x()
+        y = event.pos().y()
         t = self._x_to_time(x)
+        px = self._time_to_x(self.playhead_pos)
 
         if not self._drag_mode:
-            # Actualizar cursor según posición
+            # Comprobar si el ratón está sobre el triángulo rojo del marcador
+            if y <= 24 and abs(x - px) <= 12:
+                self.setCursor(Qt.SizeHorCursor)
+                if self._hover_mode != 'playhead':
+                    self._hover_mode = 'playhead'
+                    self.update()
+                return
+            elif self._hover_mode == 'playhead':
+                self._hover_mode = None
+                self.update()
+
+            if y <= 24:
+                self.setCursor(Qt.PointingHandCursor)
+                return
+
             hover_mode = None
             hover_idx = -1
             for idx, (st, en) in enumerate(self.segments):
@@ -284,14 +395,27 @@ class AudioTimelineCanvas(QWidget):
                 self.setCursor(Qt.SizeHorCursor)
             elif hover_mode == 'move':
                 self.setCursor(Qt.OpenHandCursor)
-            elif event.pos().y() <= 22:
-                self.setCursor(Qt.PointingHandCursor)
             else:
                 self.setCursor(Qt.CrossCursor)
             return
 
         # Arrastre activo
-        if self._drag_mode == 'create':
+        if self._drag_mode == 'playhead':
+            new_t = max(0.0, min(self.total_duration, t))
+            self.playhead_pos = new_t
+            self.seek_requested.emit(new_t)
+            # Si el arrastre se aproxima a los bordes con zoom activo, hacer auto-pan suave
+            if self.zoom_level > 1.0:
+                vis_dur = max(0.001, self.total_duration / self.zoom_level)
+                if x >= self.width() - 5:
+                    self.set_view_start(self.view_start + (vis_dur * 0.05))
+                elif x <= 5:
+                    self.set_view_start(self.view_start - (vis_dur * 0.05))
+            self.setCursor(Qt.SizeHorCursor)
+            self.update()
+            return
+
+        elif self._drag_mode == 'create':
             st = min(self._drag_start_time, t)
             en = max(self._drag_start_time, t)
             self._orig_seg = (st, en)
@@ -325,7 +449,13 @@ class AudioTimelineCanvas(QWidget):
         x = event.pos().x()
         t = self._x_to_time(x)
 
-        if self._drag_mode == 'create' and self._orig_seg:
+        if self._drag_mode == 'playhead':
+            self.seek_requested.emit(self.playhead_pos)
+            self._drag_mode = None
+            self.update()
+            return
+
+        elif self._drag_mode == 'create' and self._orig_seg:
             st, en = self._orig_seg
             if en - st >= 0.35:
                 self.segments.append((round(st, 2), round(en, 2)))
@@ -334,13 +464,12 @@ class AudioTimelineCanvas(QWidget):
                 self.segments_changed.emit(self.segments)
                 self.segment_selected.emit(self.selected_idx, st, en)
             else:
-                # Clic sin arrastre suficiente: mover la aguja roja a este punto
+                # Clic simple sin arrastre sobre la onda: mover la aguja roja a este punto
                 self.seek_requested.emit(t)
                 self.set_playhead(t)
             self._orig_seg = None
 
         elif self._drag_mode == 'move':
-            # Si solo fue un clic sin arrastre (< 4px), mover la aguja roja a este punto
             if abs(x - self._drag_start_x) < 4:
                 self.seek_requested.emit(t)
                 self.set_playhead(t)
@@ -355,6 +484,12 @@ class AudioTimelineCanvas(QWidget):
         self._orig_seg = None
         self.update()
 
+    def leaveEvent(self, event):
+        if self._hover_mode:
+            self._hover_mode = None
+            self.update()
+        super().leaveEvent(event)
+
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Delete, Qt.Key_Backspace):
             self.delete_selected_segment()
@@ -368,6 +503,8 @@ class AudioTimelineCanvas(QWidget):
         painter.setRenderHint(QPainter.Antialiasing, True)
         w = float(self.width())
         h = float(self.height())
+        if w <= 0 or h <= 0:
+            return
 
         ruler_h = 24.0
         wave_h = h - ruler_h
@@ -381,39 +518,79 @@ class AudioTimelineCanvas(QWidget):
         painter.setPen(QPen(QColor("#1e293b"), 1))
         painter.drawLine(0, int(ruler_h), int(w), int(ruler_h))
 
-        # 2. Regla superior de marcas de tiempo
+        # 2. Regla superior de marcas de tiempo adaptativa al zoom
         painter.setFont(QFont("Consolas", 8))
-        step_sec = 5.0 if self.total_duration <= 60.0 else (10.0 if self.total_duration <= 180.0 else 30.0)
+        vis_dur = max(0.001, self.total_duration / self.zoom_level)
 
-        t_mark = 0.0
-        while t_mark <= self.total_duration:
+        if vis_dur <= 1.0:
+            step_sec = 0.1
+        elif vis_dur <= 2.5:
+            step_sec = 0.25
+        elif vis_dur <= 5.0:
+            step_sec = 0.5
+        elif vis_dur <= 12.0:
+            step_sec = 1.0
+        elif vis_dur <= 25.0:
+            step_sec = 2.0
+        elif vis_dur <= 60.0:
+            step_sec = 5.0
+        elif vis_dur <= 150.0:
+            step_sec = 10.0
+        elif vis_dur <= 300.0:
+            step_sec = 20.0
+        elif vis_dur <= 600.0:
+            step_sec = 30.0
+        else:
+            step_sec = 60.0
+
+        first_mark = math.floor(self.view_start / step_sec) * step_sec
+        t_mark = max(0.0, first_mark)
+        max_mark = min(self.total_duration, self.view_start + vis_dur + step_sec)
+
+        while t_mark <= max_mark:
             x_m = self._time_to_x(t_mark)
-            painter.setPen(QPen(QColor("#475569"), 1))
-            painter.drawLine(int(x_m), int(ruler_h - 7), int(x_m), int(ruler_h))
+            if -20 <= x_m <= w + 20:
+                painter.setPen(QPen(QColor("#475569"), 1))
+                painter.drawLine(int(x_m), int(ruler_h - 7), int(x_m), int(ruler_h))
 
-            # Texto de tiempo
-            lbl = format_seconds_exact(t_mark).split(".")[0]
-            painter.setPen(QColor("#94a3b8"))
-            painter.drawText(int(x_m) + 3, int(ruler_h - 6), lbl)
+                # Texto de tiempo
+                if step_sec < 1.0:
+                    lbl = format_seconds_exact(t_mark)
+                else:
+                    lbl = format_seconds_exact(t_mark).split(".")[0]
+                painter.setPen(QColor("#94a3b8"))
+                painter.drawText(int(x_m) + 3, int(ruler_h - 6), lbl)
+
             t_mark += step_sec
 
         # Línea central sutil de la forma de onda
         painter.setPen(QPen(QColor("#1e293b"), 1, Qt.DashLine))
         painter.drawLine(0, int(center_y), int(w), int(center_y))
 
-        # 3. Dibujar Forma de Onda (Waveform)
-        if self.waveform_peaks is not None and len(self.waveform_peaks) > 0:
-            num_bars = len(self.waveform_peaks)
-            bar_w = max(1.0, w / float(num_bars))
+        # 3. Dibujar Forma de Onda (Waveform) adaptativa con resolución continua
+        if self.waveform_peaks is not None and len(self.waveform_peaks) > 0 and self.total_duration > 0:
+            total_p = len(self.waveform_peaks)
             max_amp = (wave_h / 2.0) - 4.0
 
+            col_step = 2.0
+            num_cols = int(w / col_step) + 1
             painter.setPen(Qt.NoPen)
-            for i, peak in enumerate(self.waveform_peaks):
-                bx = i * bar_w
-                bh = max(2.0, float(peak) * max_amp)
-                # Gradiente vertical de barra de audio
+
+            for i in range(num_cols):
+                col_x = i * col_step
+                t1 = self._x_to_time(col_x)
+                t2 = self._x_to_time(col_x + col_step)
+
+                idx1 = int((t1 / self.total_duration) * total_p)
+                idx2 = int((t2 / self.total_duration) * total_p) + 1
+                idx1 = max(0, min(total_p - 1, idx1))
+                idx2 = max(idx1 + 1, min(total_p, idx2))
+
+                peak = float(np.max(self.waveform_peaks[idx1:idx2]))
+                bh = max(2.0, peak * max_amp)
+
                 painter.fillRect(
-                    QRectF(bx, center_y - bh, max(1.0, bar_w - 0.5), bh * 2.0),
+                    QRectF(col_x, center_y - bh, max(1.0, col_step - 0.5), bh * 2.0),
                     QColor("#1e3a8a")
                 )
 
@@ -421,15 +598,20 @@ class AudioTimelineCanvas(QWidget):
         for idx, (st, en) in enumerate(self.segments):
             x1 = self._time_to_x(st)
             x2 = self._time_to_x(en)
+
+            # Omitir si queda completamente fuera de pantalla
+            if x2 < -10 or x1 > w + 10:
+                continue
+
             seg_w = max(4.0, x2 - x1)
             is_active = (idx == self.selected_idx)
 
-            # Fondo del bloque de voz (Translúcido para que la onda de audio sea siempre visible)
+            # Fondo del bloque de voz (Translúcido para que la onda sea siempre visible)
             rect = QRectF(x1, ruler_h + 2.0, seg_w, wave_h - 4.0)
             fill_color = QColor(14, 165, 233, 75) if is_active else QColor(56, 189, 248, 38)
             painter.fillRect(rect, fill_color)
 
-            # Borde exterior (Asegurar NoBrush para que drawRoundedRect NO rellene con pincel previo)
+            # Borde exterior (Asegurar NoBrush para que drawRoundedRect NO rellene)
             border_pen = QPen(
                 QColor("#38bdf8") if is_active else QColor("#0284c7"),
                 2.0 if is_active else 1.2
@@ -444,18 +626,20 @@ class AudioTimelineCanvas(QWidget):
             painter.setBrush(QBrush(h_color))
 
             # Asa izquierda
-            painter.drawRoundedRect(QRectF(x1, center_y - 12, 4.0, 24.0), 2.0, 2.0)
+            if -10 <= x1 <= w + 10:
+                painter.drawRoundedRect(QRectF(x1, center_y - 12, 4.0, 24.0), 2.0, 2.0)
             # Asa derecha
-            painter.drawRoundedRect(QRectF(x2 - 4.0, center_y - 12, 4.0, 24.0), 2.0, 2.0)
+            if -10 <= x2 <= w + 10:
+                painter.drawRoundedRect(QRectF(x2 - 4.0, center_y - 12, 4.0, 24.0), 2.0, 2.0)
 
-            # Resetear pincel a NoBrush inmediatamente para la siguiente iteración
             painter.setBrush(Qt.NoBrush)
 
             # Etiqueta de tiempo del segmento
             painter.setFont(QFont("Segoe UI", 8, QFont.Bold if is_active else QFont.Normal))
             painter.setPen(QColor("#f8fafc") if is_active else QColor("#cbd5e1"))
-            dur_str = f"{en - st:.1f}s"
-            painter.drawText(QRectF(x1 + 6, ruler_h + 6, seg_w - 12, 16), Qt.AlignLeft, f"#{idx+1} ({dur_str})")
+            dur_str = f"{en - st:.2f}s"
+            lbl_x = max(x1 + 6, 6.0)
+            painter.drawText(QRectF(lbl_x, ruler_h + 6, min(seg_w - 12, w - lbl_x), 16), Qt.AlignLeft, f"#{idx+1} ({dur_str})")
 
         # Dibujar tramo en creación activa
         if self._drag_mode == 'create' and self._orig_seg:
@@ -468,25 +652,41 @@ class AudioTimelineCanvas(QWidget):
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(c_rect)
 
-        # 5. Aguja de Reproducción (Playhead)
+        # 5. Aguja de Reproducción (Playhead con marcador triangular arrastrable)
         px = self._time_to_x(self.playhead_pos)
-        painter.setPen(QPen(QColor("#ef4444"), 2.0))
-        painter.drawLine(int(px), 0, int(px), int(h))
+        if -20 <= px <= w + 20:
+            # Línea vertical del marcador
+            painter.setPen(QPen(QColor("#ef4444"), 2.0))
+            painter.drawLine(int(px), int(ruler_h), int(px), int(h))
 
-        # Cabeza triangular del playhead
-        head = QPolygonF([
-            QPointF(px - 5, 0),
-            QPointF(px + 5, 0),
-            QPointF(px, 8)
-        ])
-        painter.setBrush(QBrush(QColor("#ef4444")))
-        painter.drawPolygon(head)
+            # Marcador triangular en la regla superior
+            is_grab = (self._hover_mode == 'playhead' or self._drag_mode == 'playhead')
+            m_color = QColor("#ff4d4d") if is_grab else QColor("#ef4444")
+            b_color = QColor("#ffffff") if is_grab else QColor("#b91c1c")
+
+            # Triángulo invertido ergonómico con punta en y=15
+            head = QPolygonF([
+                QPointF(px - 7, 0),
+                QPointF(px + 7, 0),
+                QPointF(px + 7, 5),
+                QPointF(px, 15),
+                QPointF(px - 7, 5)
+            ])
+            painter.setPen(QPen(b_color, 1.2))
+            painter.setBrush(QBrush(m_color))
+            painter.drawPolygon(head)
+
+            # Grips visuales horizontales si está en foco o arrastre
+            if is_grab:
+                painter.setPen(QPen(QColor("#ffffff"), 1.2))
+                painter.drawLine(int(px - 3), 3, int(px + 3), 3)
+                painter.drawLine(int(px - 2), 6, int(px + 2), 6)
 
 
 class AudioSegmentSelectorWidget(QWidget):
     """
     Contenedor completo que incluye el lienzo interactivo de la forma de onda,
-    barra de transporte, controles de reproducción normal y por tramo, borrado y resumen de tiempos.
+    barra de transporte, controles de reproducción normal y por tramo, zoom y desplazamiento.
     """
     segments_updated = pyqtSignal(list)
     play_normal_requested = pyqtSignal(float)           # start_sec (hasta el final del archivo)
@@ -503,8 +703,9 @@ class AudioSegmentSelectorWidget(QWidget):
 
         # 1. Cabecera explicativa
         self.lbl_guide = QLabel(
-            "✂️ <b>Selector Gráfico de Voz:</b> Haz clic en la regla o sobre la onda para mover el marcador rojo. "
-            "Arrastra con el ratón sobre la onda para marcar o recortar tramos de habla. Arrastra los bordes para ajustar con precisión."
+            "✂️ <b>Selector Gráfico de Voz:</b> Arrastra el marcador rojo (triángulo superior) o haz clic en la regla para ubicar la reproducción. "
+            "Arrastra con el ratón sobre la onda para marcar tramos de habla y ajusta los bordes. "
+            "Usa los botones de Zoom o <b>Ctrl + Rueda</b> para ver la onda con máxima precisión."
         )
         self.lbl_guide.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout.addWidget(self.lbl_guide)
@@ -514,7 +715,41 @@ class AudioSegmentSelectorWidget(QWidget):
         self.canvas.segment_selected.connect(self._on_segment_selected)
         self.canvas.segments_changed.connect(self._on_segments_changed)
         self.canvas.seek_requested.connect(self.seek_requested)
+        self.canvas.view_changed.connect(self._on_canvas_view_changed)
         layout.addWidget(self.canvas)
+
+        # 2.1 Barra de desplazamiento horizontal para vista ampliada (Zoom)
+        self.scrollbar = QScrollBar(Qt.Horizontal, self)
+        self.scrollbar.setRange(0, 1000)
+        self.scrollbar.setValue(0)
+        self.scrollbar.setSingleStep(20)
+        self.scrollbar.setPageStep(200)
+        self.scrollbar.setStyleSheet("""
+            QScrollBar:horizontal {
+                height: 8px;
+                background: #0b1329;
+                border-radius: 4px;
+                margin: 0px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #334155;
+                min-width: 30px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:horizontal:hover {
+                background: #0284c7;
+            }
+            QScrollBar::handle:horizontal:pressed {
+                background: #38bdf8;
+            }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0px;
+                height: 0px;
+            }
+        """)
+        self.scrollbar.valueChanged.connect(self._on_scrollbar_value_changed)
+        self.scrollbar.setVisible(False)
+        layout.addWidget(self.scrollbar)
 
         # 3. Barra de Controles y Herramientas
         h_tools = QHBoxLayout()
@@ -553,6 +788,31 @@ class AudioSegmentSelectorWidget(QWidget):
         self.lbl_info = QLabel("Seleccione o dibuje un tramo de audio.")
         self.lbl_info.setStyleSheet("color: #38bdf8; font-weight: 500; font-size: 11px;")
 
+        # Controles de Zoom
+        self.lbl_zoom_title = QLabel("Zoom:")
+        self.lbl_zoom_title.setStyleSheet("color: #94a3b8; font-size: 11px; margin-left: 6px;")
+
+        self.btn_zoom_out = QPushButton(" 🔍- ")
+        self.btn_zoom_out.setToolTip("Reducir zoom (o Ctrl + Rueda hacia abajo)")
+        self.btn_zoom_out.setStyleSheet("padding: 3px 8px; font-weight: bold;")
+        self.btn_zoom_out.setEnabled(False)
+        self.btn_zoom_out.clicked.connect(self.canvas.zoom_out)
+
+        self.lbl_zoom = QLabel("100%")
+        self.lbl_zoom.setAlignment(Qt.AlignCenter)
+        self.lbl_zoom.setStyleSheet("color: #38bdf8; font-weight: 600; font-size: 11px; min-width: 44px; padding: 2px 6px; background: #0f172a; border: 1px solid #1e293b; border-radius: 4px;")
+
+        self.btn_zoom_in = QPushButton(" 🔍+ ")
+        self.btn_zoom_in.setToolTip("Aumentar zoom (o Ctrl + Rueda hacia arriba)")
+        self.btn_zoom_in.setStyleSheet("padding: 3px 8px; font-weight: bold;")
+        self.btn_zoom_in.clicked.connect(self.canvas.zoom_in)
+
+        self.btn_zoom_fit = QPushButton(" 100% ")
+        self.btn_zoom_fit.setToolTip("Restablecer zoom al 100% (ajustar vista)")
+        self.btn_zoom_fit.setStyleSheet("padding: 3px 6px;")
+        self.btn_zoom_fit.setEnabled(False)
+        self.btn_zoom_fit.clicked.connect(self.canvas.reset_zoom)
+
         h_tools.addWidget(self.btn_play_normal)
         h_tools.addWidget(self.btn_play_seg)
         h_tools.addWidget(self.btn_del_seg)
@@ -560,6 +820,11 @@ class AudioSegmentSelectorWidget(QWidget):
         h_tools.addSpacing(10)
         h_tools.addWidget(self.lbl_info)
         h_tools.addStretch()
+        h_tools.addWidget(self.lbl_zoom_title)
+        h_tools.addWidget(self.btn_zoom_out)
+        h_tools.addWidget(self.lbl_zoom)
+        h_tools.addWidget(self.btn_zoom_in)
+        h_tools.addWidget(self.btn_zoom_fit)
 
         layout.addLayout(h_tools)
 
@@ -568,7 +833,7 @@ class AudioSegmentSelectorWidget(QWidget):
 
     def load_audio_file(self, ffmpeg_path: str, media_file: str, duration: float):
         """Carga el audio y calcula la forma de onda visual."""
-        peaks = extract_waveform_peaks(ffmpeg_path, media_file, num_peaks=600)
+        peaks = extract_waveform_peaks(ffmpeg_path, media_file, num_peaks=2400)
         self.canvas.set_media(duration, peaks)
         self._update_info_label()
 
@@ -648,7 +913,6 @@ class AudioSegmentSelectorWidget(QWidget):
             self.play_requested.emit(st, en)
             self.set_playing_state(True, mode="selection")
         else:
-            # Si no hay selección, reproducir desde el marcador rojo
             st = self.canvas.playhead_pos
             self.play_normal_requested.emit(st)
             self.set_playing_state(True, mode="normal")
@@ -663,6 +927,37 @@ class AudioSegmentSelectorWidget(QWidget):
     def _on_segments_changed(self, segs: list):
         self._update_info_label()
         self.segments_updated.emit(segs)
+
+    def _on_canvas_view_changed(self, view_start: float, zoom_level: float):
+        self.lbl_zoom.setText(f"{int(round(zoom_level * 100))}%")
+        if zoom_level <= 1.01:
+            self.scrollbar.setVisible(False)
+            self.btn_zoom_out.setEnabled(False)
+            self.btn_zoom_fit.setEnabled(False)
+        else:
+            self.scrollbar.setVisible(True)
+            self.btn_zoom_out.setEnabled(True)
+            self.btn_zoom_fit.setEnabled(True)
+
+            vis_dur = max(0.001, self.canvas.total_duration / zoom_level)
+            max_start = max(0.001, self.canvas.total_duration - vis_dur)
+            val = int(round((view_start / max_start) * 1000))
+            page = max(50, int((vis_dur / self.canvas.total_duration) * 1000))
+
+            self.scrollbar.blockSignals(True)
+            self.scrollbar.setPageStep(page)
+            self.scrollbar.setValue(min(1000, max(0, val)))
+            self.scrollbar.blockSignals(False)
+
+        self.btn_zoom_in.setEnabled(zoom_level < 19.9)
+
+    def _on_scrollbar_value_changed(self, value: int):
+        if self.canvas.total_duration <= 0 or self.canvas.zoom_level <= 1.0:
+            return
+        vis_dur = max(0.001, self.canvas.total_duration / self.canvas.zoom_level)
+        max_start = max(0.0, self.canvas.total_duration - vis_dur)
+        new_start = (value / 1000.0) * max_start
+        self.canvas.set_view_start(new_start)
 
     def _update_info_label(self):
         segs = self.canvas.segments

@@ -1552,10 +1552,69 @@ class TestFFmpegSuite(unittest.TestCase):
         canvas.clear_all_segments()
         self.assertEqual(len(canvas.segments), 0)
 
+        # Probar zoom y navegación en la forma de onda
+        canvas.set_media(10.0, np.zeros(2400, dtype=np.float32))
+        self.assertEqual(canvas.zoom_level, 1.0)
+        self.assertEqual(canvas.view_start, 0.0)
+
+        canvas.set_zoom(2.0)
+        self.assertEqual(canvas.zoom_level, 2.0)
+        canvas.set_view_start(2.5)
+        self.assertEqual(canvas.view_start, 2.5)
+
+        canvas.zoom_in()
+        self.assertGreater(canvas.zoom_level, 2.0)
+        canvas.reset_zoom()
+        self.assertEqual(canvas.zoom_level, 1.0)
+        self.assertEqual(canvas.view_start, 0.0)
+
+        # Probar arrastre del marcador playhead por el triángulo superior
+        canvas.resize(400, 130)
+        canvas.set_playhead(2.0)
+        px = canvas._time_to_x(2.0)
+        from PyQt5.QtGui import QMouseEvent
+        from PyQt5.QtCore import Qt, QPointF
+
+        # Simular clic en el triángulo superior
+        press_ev = QMouseEvent(QMouseEvent.MouseButtonPress, QPointF(px, 10.0), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        canvas.mousePressEvent(press_ev)
+        self.assertEqual(canvas._drag_mode, 'playhead')
+
+        # Simular arrastre a 5.0 segundos
+        seek_vals = []
+        canvas.seek_requested.connect(seek_vals.append)
+        px_new = canvas._time_to_x(5.0)
+        move_ev = QMouseEvent(QMouseEvent.MouseMove, QPointF(px_new, 10.0), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+        canvas.mouseMoveEvent(move_ev)
+        self.assertAlmostEqual(canvas.playhead_pos, 5.0, delta=0.1)
+        self.assertTrue(len(seek_vals) > 0)
+
+        # Soltar ratón
+        release_ev = QMouseEvent(QMouseEvent.MouseButtonRelease, QPointF(px_new, 10.0), Qt.LeftButton, Qt.NoButton, Qt.NoModifier)
+        canvas.mouseReleaseEvent(release_ev)
+        self.assertIsNone(canvas._drag_mode)
+
         # Probar interacción con el widget contenedor y carga desde tarjeta de hablante
         timeline_widget = voice_tab.timeline_widget
         timeline_widget.set_segments([(2.0, 5.0), (7.0, 9.0)])
         self.assertEqual(len(timeline_widget.get_segments()), 2)
+
+        # Controles de Zoom en timeline_widget
+        self.assertIsNotNone(timeline_widget.btn_zoom_in)
+        self.assertIsNotNone(timeline_widget.btn_zoom_out)
+        self.assertIsNotNone(timeline_widget.btn_zoom_fit)
+        self.assertIsNotNone(timeline_widget.scrollbar)
+        self.assertEqual(timeline_widget.lbl_zoom.text(), "100%")
+
+        timeline_widget.btn_zoom_in.click()
+        self.assertGreater(timeline_widget.canvas.zoom_level, 1.0)
+        self.assertFalse(timeline_widget.scrollbar.isHidden())
+        self.assertNotEqual(timeline_widget.lbl_zoom.text(), "100%")
+
+        timeline_widget.btn_zoom_fit.click()
+        self.assertEqual(timeline_widget.canvas.zoom_level, 1.0)
+        self.assertTrue(timeline_widget.scrollbar.isHidden())
+        self.assertEqual(timeline_widget.lbl_zoom.text(), "100%")
 
         mock_spk_data = {
             "id": 1,
