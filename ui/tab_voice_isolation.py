@@ -8,9 +8,10 @@ Permite la extracción de voces limpias con reducción de ruido y la separación
 import os
 import sys
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional, List, Dict, Any
-from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtCore import Qt, QUrl, QTimer
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QCheckBox, QRadioButton, QSpinBox,
@@ -155,6 +156,13 @@ class TabVoiceIsolation(QWidget):
         self.current_playing_spk_id: Optional[int] = None
         self.speaker_cards: Dict[int, SpeakerCard] = {}
         self._timeline_stop_ms: Optional[int] = None
+
+        # Temporizador de alta resolución para interpolación suave y continua del marcador (40 FPS)
+        self._smooth_timer = QTimer(self)
+        self._smooth_timer.setInterval(25)  # 25 ms = 40 cuadros por segundo
+        self._smooth_timer.timeout.connect(self._on_smooth_playhead_tick)
+        self._play_sync_pos: float = 0.0
+        self._play_sync_perf: float = 0.0
 
         form_widget = QWidget()
         form_layout = QVBoxLayout(form_widget)
@@ -798,6 +806,37 @@ class TabVoiceIsolation(QWidget):
         spk_name = speaker_data.get("name", "Hablante")
         self.progress_bar.set_status(f"Tramos de {spk_name} cargados en la Línea de Tiempo. Puede escuchar, ajustar bordes o borrar tramos no deseados.")
 
+    def _on_smooth_playhead_tick(self):
+        """Actualiza suavemente la aguja de reproducción a 40 FPS sin saltos bruscos."""
+        if self.player.state() != QMediaPlayer.PlayingState:
+            self._smooth_timer.stop()
+            return
+
+        elapsed = time.perf_counter() - self._play_sync_perf
+        est_sec = self._play_sync_pos + elapsed
+
+        # Comprobar límite de parada para reproducción de selección
+        if self._timeline_stop_ms is not None:
+            stop_sec = self._timeline_stop_ms / 1000.0
+            if est_sec >= stop_sec:
+                self._smooth_timer.stop()
+                self._timeline_stop_ms = None
+                self.player.pause()  # Usar pause para evitar que QMediaPlayer resetee la posición a 0
+                self.timeline_widget.set_playhead_pos(stop_sec)
+                self.timeline_widget.set_playing_state(False)
+                return
+
+        # Comprobar fin del archivo para reproducción normal continua
+        if self.media_duration > 0 and est_sec >= self.media_duration:
+            self._smooth_timer.stop()
+            self._timeline_stop_ms = None
+            self.player.pause()
+            self.timeline_widget.set_playhead_pos(self.media_duration)
+            self.timeline_widget.set_playing_state(False)
+            return
+
+        self.timeline_widget.set_playhead_pos(est_sec)
+
     def _on_timeline_play_normal_requested(self, start_sec: float):
         """Reproduce normalmente a partir de donde esté el marcador rojo (playhead)."""
         input_path = self.input_selector.get_path()
@@ -807,16 +846,24 @@ class TabVoiceIsolation(QWidget):
 
         try:
             self._timeline_stop_ms = None  # Reproducción continua normal: sin límite de fin
+            self._smooth_timer.stop()
             self.player.stop()
             content = QMediaContent(QUrl.fromLocalFile(input_path))
             self.player.setMedia(content)
             self.player.setPosition(int(start_sec * 1000))
             self.player.play()
+
+            self._play_sync_pos = float(start_sec)
+            self._play_sync_perf = time.perf_counter()
+            self._smooth_timer.start()
+
             self.current_playing_spk_id = None
             self._update_speaker_cards_playing_state()
+            self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="normal")
             self.progress_bar.set_status("Reproduciendo audio normalmente...")
         except Exception:
+            self._smooth_timer.stop()
             self.timeline_widget.set_playing_state(False)
 
     def _on_timeline_play_selection_requested(self, start_sec: float, end_sec: float):
@@ -828,41 +875,66 @@ class TabVoiceIsolation(QWidget):
 
         try:
             self._timeline_stop_ms = int(end_sec * 1000)
+            self._smooth_timer.stop()
             self.player.stop()
             content = QMediaContent(QUrl.fromLocalFile(input_path))
             self.player.setMedia(content)
             self.player.setPosition(int(start_sec * 1000))
             self.player.play()
+
+            self._play_sync_pos = float(start_sec)
+            self._play_sync_perf = time.perf_counter()
+            self._smooth_timer.start()
+
             self.current_playing_spk_id = None
             self._update_speaker_cards_playing_state()
+            self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="selection")
             self.progress_bar.set_status(f"Reproduciendo selección ({end_sec - start_sec:.2f}s)...")
         except Exception:
+            self._smooth_timer.stop()
             self.timeline_widget.set_playing_state(False)
 
     def _on_timeline_play_requested(self, start_sec: float, end_sec: float):
         self._on_timeline_play_selection_requested(start_sec, end_sec)
 
     def _on_timeline_stop_requested(self):
-        self.player.stop()
-        self.timeline_widget.set_playing_state(False)
+        self._smooth_timer.stop()
         self._timeline_stop_ms = None
+        cur_pos_sec = self.timeline_widget.canvas.playhead_pos
+        self.player.pause()  # Usar pause para no resetear a 0 el buffer interno
+        self.timeline_widget.set_playing_state(False)
+        self.timeline_widget.set_playhead_pos(cur_pos_sec)  # El marcador se queda en su lugar
         self.progress_bar.set_status("Reproducción detenida.")
 
     def _on_timeline_seek_requested(self, sec: float):
+        self._play_sync_pos = float(sec)
+        self._play_sync_perf = time.perf_counter()
         self.player.setPosition(int(sec * 1000))
 
     def _on_player_position_changed(self, pos_ms: int):
+        # Descartar eventos si el reproductor no está en estado activo de reproducción
+        if self.player.state() != QMediaPlayer.PlayingState:
+            return
+
         if self.radio_mode_manual.isChecked():
-            self.timeline_widget.set_playhead_pos(pos_ms / 1000.0)
+            # Sincronizar referencia temporal con el reloj real del hardware para evitar derivas
+            real_sec = pos_ms / 1000.0
+            self._play_sync_pos = real_sec
+            self._play_sync_perf = time.perf_counter()
+
             if hasattr(self, "_timeline_stop_ms") and self._timeline_stop_ms is not None and pos_ms >= self._timeline_stop_ms:
-                self.player.stop()
-                self.timeline_widget.set_playing_state(False)
+                stop_sec = self._timeline_stop_ms / 1000.0
+                self._smooth_timer.stop()
                 self._timeline_stop_ms = None
+                self.player.pause()
+                self.timeline_widget.set_playhead_pos(stop_sec)
+                self.timeline_widget.set_playing_state(False)
 
     def _on_player_state_changed(self, state):
         """Maneja el fin o cambio de estado de la reproducción de audio."""
         if state != QMediaPlayer.PlayingState:
+            self._smooth_timer.stop()
             self.current_playing_spk_id = None
             self._update_speaker_cards_playing_state()
             if hasattr(self, "timeline_widget"):

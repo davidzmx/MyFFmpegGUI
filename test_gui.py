@@ -1638,6 +1638,19 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(timeline_widget.btn_play_normal.text(), " Reproducir")
         self.assertEqual(timeline_widget.btn_play_seg.text(), " Reproducir Selección")
 
+        # Probar temporizador suave y persistencia del marcador al detenerse
+        self.assertIsNotNone(voice_tab._smooth_timer)
+        self.assertEqual(voice_tab._smooth_timer.interval(), 25)
+
+        # Detener reproducción no debe resetear el marcador rojo a 0.0
+        timeline_widget.set_playhead_pos(4.5)
+        voice_tab._on_timeline_stop_requested()
+        self.assertEqual(timeline_widget.canvas.playhead_pos, 4.5)
+
+        # Señales de posición 0 al detenerse no deben sobreescribir la posición
+        voice_tab._on_player_position_changed(0)
+        self.assertEqual(timeline_widget.canvas.playhead_pos, 4.5)
+
         win.close()
 
 
