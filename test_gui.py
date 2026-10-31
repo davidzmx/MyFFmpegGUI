@@ -565,9 +565,11 @@ class TestFFmpegSuite(unittest.TestCase):
         # Asignar segmentos manuales y comprobar comando generado
         seg_tab.timeline_widget.set_segments([(0.5, 2.0), (3.0, 4.5)])
         self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 2)
-        # Comprobar que la tabla de segmentos se sincroniza
+        # Comprobar que la tabla de segmentos se sincroniza y tiene altura mínima visible
         seg_tab._sync_segments_table()
         self.assertEqual(seg_tab.table_segments.rowCount(), 2)
+        self.assertGreaterEqual(seg_tab.table_segments.minimumHeight(), 140)
+        self.assertFalse(seg_tab.table_segments.verticalHeader().isVisible())
 
         # Comprobar visor de video y marcadores In/Out
         self.assertTrue(hasattr(seg_tab, "video_widget"))

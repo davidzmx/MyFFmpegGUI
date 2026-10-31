@@ -422,6 +422,9 @@ class TabSegment(QWidget):
 
         self.table_segments = QTableWidget(0, 5)
         self.table_segments.setHorizontalHeaderLabels(["#", "Punto Inicio", "Punto Fin", "Duración", "Acciones"])
+        self.table_segments.verticalHeader().setVisible(False)
+        self.table_segments.verticalHeader().setDefaultSectionSize(34)
+        self.table_segments.setCornerButtonEnabled(False)
         self.table_segments.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
         self.table_segments.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table_segments.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -429,7 +432,35 @@ class TabSegment(QWidget):
         self.table_segments.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table_segments.setSelectionBehavior(QTableWidget.SelectRows)
         self.table_segments.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table_segments.setMaximumHeight(150)
+        self.table_segments.setMinimumHeight(145)
+        self.table_segments.setMaximumHeight(220)
+        self.table_segments.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+        self.table_segments.setStyleSheet("""
+            QTableWidget {
+                background-color: #0b1329;
+                alternate-background-color: #0f172a;
+                color: #f8fafc;
+                gridline-color: #1e293b;
+                border: 1px solid #1e293b;
+                border-radius: 4px;
+            }
+            QTableWidget::item {
+                padding: 4px 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #0369a1;
+                color: #ffffff;
+            }
+            QHeaderView::section {
+                background-color: #111c38;
+                color: #94a3b8;
+                font-weight: bold;
+                padding: 5px 8px;
+                border: none;
+                border-bottom: 1px solid #1e293b;
+                border-right: 1px solid #1e293b;
+            }
+        """)
         self.table_segments.cellClicked.connect(self._on_table_segment_clicked)
 
         h_tbl_actions = QHBoxLayout()
@@ -1108,6 +1139,7 @@ class TabSegment(QWidget):
             total_dur += dur
             row = self.table_segments.rowCount()
             self.table_segments.insertRow(row)
+            self.table_segments.setRowHeight(row, 34)
 
             # Col 0: #
             item_num = QTableWidgetItem(f"#{idx}")
@@ -1131,13 +1163,14 @@ class TabSegment(QWidget):
 
             # Col 4: Botones Previsualizar y Eliminar
             cell_widget = QWidget()
+            cell_widget.setMinimumWidth(115)
             layout_cell = QHBoxLayout(cell_widget)
-            layout_cell.setContentsMargins(4, 2, 4, 2)
+            layout_cell.setContentsMargins(6, 2, 6, 2)
             layout_cell.setSpacing(6)
 
             btn_prev = QPushButton("▶ Ver")
             btn_prev.setToolTip(f"Previsualizar fotogramas del segmento #{idx}")
-            btn_prev.setStyleSheet("padding: 2px 6px; font-size: 11px;")
+            btn_prev.setStyleSheet("padding: 2px 8px; font-size: 11px;")
             btn_prev.clicked.connect(lambda _, s=st, e=en: self._on_timeline_play_selection_requested(s, e))
 
             btn_del = QPushButton("🗑️")
@@ -1145,6 +1178,7 @@ class TabSegment(QWidget):
             btn_del.setStyleSheet("padding: 2px 6px; font-size: 11px;")
             btn_del.clicked.connect(lambda _, i=idx - 1: self._delete_segment_by_index(i))
 
+            layout_cell.addStretch()
             layout_cell.addWidget(btn_prev)
             layout_cell.addWidget(btn_del)
             layout_cell.addStretch()
