@@ -60,7 +60,15 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(res.returncode, 0, "No se pudo generar el video sintético de prueba")
 
     def tearDown(self):
-        self.tmp_dir.cleanup()
+        try:
+            self.tmp_dir.cleanup()
+        except Exception:
+            import time
+            time.sleep(0.15)
+            try:
+                self.tmp_dir.cleanup()
+            except Exception:
+                pass
 
     def test_01_paths_and_version(self):
         self.assertTrue(self.ffmpeg_path and os.path.isfile(self.ffmpeg_path))
@@ -557,6 +565,32 @@ class TestFFmpegSuite(unittest.TestCase):
         # Asignar segmentos manuales y comprobar comando generado
         seg_tab.timeline_widget.set_segments([(0.5, 2.0), (3.0, 4.5)])
         self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 2)
+        # Comprobar que la tabla de segmentos se sincroniza
+        seg_tab._sync_segments_table()
+        self.assertEqual(seg_tab.table_segments.rowCount(), 2)
+
+        # Comprobar visor de video y marcadores In/Out
+        self.assertTrue(hasattr(seg_tab, "video_widget"))
+        self.assertTrue(hasattr(seg_tab, "btn_mark_in"))
+        self.assertTrue(hasattr(seg_tab, "btn_mark_out"))
+        self.assertTrue(hasattr(seg_tab, "btn_add_marked_seg"))
+
+        # Cargar video en TabSegment
+        seg_tab._on_file_selected(self.test_video)
+        self.assertGreater(seg_tab.media_duration, 3.5)
+        self.assertFalse(seg_tab.video_widget.isHidden())
+
+        # Probar fijar In y Out
+        seg_tab.timeline_widget.set_playhead_pos(1.0)
+        seg_tab._on_mark_in_clicked()
+        self.assertEqual(seg_tab.mark_in_sec, 1.0)
+        seg_tab.timeline_widget.set_playhead_pos(3.0)
+        seg_tab._on_mark_out_clicked()
+        self.assertEqual(seg_tab.mark_out_sec, 3.0)
+        seg_tab._on_add_marked_segment_clicked()
+        self.assertIn((1.0, 3.0), seg_tab.timeline_widget.get_segments())
+        self.assertGreaterEqual(seg_tab.table_segments.rowCount(), 1)
+
         cmd_cut_exact = ffmpeg_core.build_cut_video_segment_command(
             self.ffmpeg_path, self.test_video, "cut_test.mp4", 0.5, 2.0, mode="exact"
         )
@@ -636,6 +670,9 @@ class TestFFmpegSuite(unittest.TestCase):
         )
         self.assertIn("0:a?", cmd_track)
         self.assertIn("1:a:0", cmd_track)
+
+        seg_tab.cleanup_media()
+        win.close()
 
         # 4. Probar ejecución real de concat con pista de audio incorporada
         # Generar pista de audio sintética de 4 segundos

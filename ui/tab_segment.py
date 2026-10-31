@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Pestaña: Dividir video en segmentos (automático o avanzado mediante línea de tiempo interactiva)
+Pestaña: Dividir video en segmentos (automático o avanzado mediante línea de tiempo interactiva y reproductor)
 """
 
 import os
@@ -14,9 +14,10 @@ from PyQt5.QtCore import Qt, QUrl, QTimer, QThread, pyqtSignal
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox, QLabel,
     QComboBox, QPushButton, QMessageBox, QSpinBox, QLineEdit, QCheckBox, QStyle,
-    QRadioButton
+    QRadioButton, QTableWidget, QTableWidgetItem, QHeaderView, QSizePolicy
 )
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
 
 from ui.widgets import (
     FileSelector, FolderSelector, ProgressBarWithStatus, LogConsole,
@@ -26,6 +27,19 @@ from ui.timeline_waveform import AudioSegmentSelectorWidget, format_seconds_exac
 import ffmpeg_core
 import config_manager
 from ffmpeg_worker import FFmpegWorker
+
+
+class ClickableVideoWidget(QVideoWidget):
+    """
+    Visor de video de QVideoWidget que permite hacer clic directo sobre la imagen
+    para alternar entre reproducción y pausa.
+    """
+    clicked = pyqtSignal()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
 
 
 class BatchVideoCutWorker(QThread):
@@ -185,10 +199,15 @@ class TabSegment(QWidget):
         self.worker = None
         self.media_duration = 0.0
 
-        # Reproductor interno para la línea de tiempo interactiva
+        # Marcadores In / Out para fijación manual rápida
+        self.mark_in_sec: Optional[float] = None
+        self.mark_out_sec: Optional[float] = None
+
+        # Reproductor interno con salida de video para la línea de tiempo interactiva
         self.player = QMediaPlayer(self)
         self.player.stateChanged.connect(self._on_player_state_changed)
         self.player.positionChanged.connect(self._on_player_position_changed)
+        self.player.mediaStatusChanged.connect(self._on_player_media_status_changed)
         self._timeline_stop_ms: Optional[int] = None
 
         # Temporizador de alta resolución para playhead suave a 40 FPS
@@ -227,7 +246,7 @@ class TabSegment(QWidget):
         # Selector de Modo: Automático vs Avanzado Manual
         h_mode_choice = QHBoxLayout()
         self.radio_mode_auto = QRadioButton("⏱️ Automático (Dividir cada N segundos)")
-        self.radio_mode_advanced = QRadioButton("✂️ Avanzado (Selección Gráfica en Línea de Tiempo)")
+        self.radio_mode_advanced = QRadioButton("✂️ Avanzado (Selección Gráfica en Línea de Tiempo y Reproductor)")
         self.radio_mode_auto.setChecked(True)
         self.radio_mode_auto.toggled.connect(self._on_segment_mode_changed)
         self.radio_mode_advanced.toggled.connect(self._on_segment_mode_changed)
@@ -260,15 +279,126 @@ class TabSegment(QWidget):
 
         layout_opts.addWidget(self.panel_auto)
 
-        # 2.2 Panel para Modo Avanzado (Línea de tiempo gráfica interactiva)
+        # 2.2 Panel para Modo Avanzado (Línea de tiempo gráfica interactiva con visor de video)
         self.panel_advanced = QWidget()
         layout_adv = QVBoxLayout(self.panel_advanced)
         layout_adv.setContentsMargins(0, 4, 0, 0)
-        layout_adv.setSpacing(8)
+        layout_adv.setSpacing(10)
 
+        # A) Visor de Video y Barra de Transporte
+        group_preview = QGroupBox("Previsualización de Video y Marcadores")
+        layout_preview = QVBoxLayout(group_preview)
+        layout_preview.setContentsMargins(8, 8, 8, 8)
+        layout_preview.setSpacing(6)
+
+        # Contenedor de Video centrado con borde oscuro
+        self.video_container = QWidget()
+        self.video_container.setObjectName("video_preview_container")
+        self.video_container.setStyleSheet(
+            "#video_preview_container { background-color: #030712; border: 1px solid #1e293b; border-radius: 6px; }"
+        )
+        self.video_container.setMinimumHeight(240)
+        self.video_container.setMaximumHeight(360)
+        self.video_container.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+
+        layout_vid_box = QVBoxLayout(self.video_container)
+        layout_vid_box.setContentsMargins(0, 0, 0, 0)
+
+        self.video_widget = ClickableVideoWidget(self.video_container)
+        self.video_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_widget.clicked.connect(self._toggle_video_playback)
+        self.video_widget.setVisible(False)
+        layout_vid_box.addWidget(self.video_widget)
+
+        self.lbl_video_placeholder = QLabel(
+            "🎬 Seleccione un video arriba para reproducir, ver fotogramas y recortar segmentos",
+            self.video_container
+        )
+        self.lbl_video_placeholder.setAlignment(Qt.AlignCenter)
+        self.lbl_video_placeholder.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 500;")
+        layout_vid_box.addWidget(self.lbl_video_placeholder)
+
+        # Conectar salida de video de QMediaPlayer a QVideoWidget
+        self.player.setVideoOutput(self.video_widget)
+
+        layout_preview.addWidget(self.video_container)
+
+        # Barra de Controles de Reproducción y Marcadores In/Out
+        bar_controls = QWidget()
+        bar_controls.setStyleSheet("background-color: #0f172a; border: 1px solid #1e293b; border-radius: 6px; padding: 2px;")
+        layout_bar = QHBoxLayout(bar_controls)
+        layout_bar.setContentsMargins(6, 4, 6, 4)
+        layout_bar.setSpacing(6)
+
+        # Botón Play / Pausa
+        self.btn_vid_play_pause = QPushButton(" Reproducir")
+        self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.btn_vid_play_pause.setStyleSheet("padding: 4px 10px; font-weight: 600;")
+        self.btn_vid_play_pause.clicked.connect(self._toggle_video_playback)
+
+        # Botón Detener
+        self.btn_vid_stop = QPushButton(" Detener")
+        self.btn_vid_stop.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
+        self.btn_vid_stop.setStyleSheet("padding: 4px 8px;")
+        self.btn_vid_stop.clicked.connect(self._stop_video_playback)
+
+        # Botones de salto / paso de 1 segundo
+        self.btn_step_back = QPushButton(" ⏪ -1s ")
+        self.btn_step_back.setToolTip("Retroceder 1 segundo (buscar cuadro anterior)")
+        self.btn_step_back.setStyleSheet("padding: 4px 6px; font-size: 11px;")
+        self.btn_step_back.clicked.connect(lambda: self._step_time(-1.0))
+
+        self.btn_step_fwd = QPushButton(" ⏩ +1s ")
+        self.btn_step_fwd.setToolTip("Avanzar 1 segundo (buscar cuadro siguiente)")
+        self.btn_step_fwd.setStyleSheet("padding: 4px 6px; font-size: 11px;")
+        self.btn_step_fwd.clicked.connect(lambda: self._step_time(1.0))
+
+        # Indicador de tiempo actual / total
+        self.lbl_time_code = QLabel("00:00.00 / 00:00.00")
+        self.lbl_time_code.setStyleSheet(
+            "font-family: Consolas, 'Courier New', monospace; font-size: 12px; font-weight: bold; color: #38bdf8; padding: 2px 8px;"
+        )
+
+        layout_bar.addWidget(self.btn_vid_play_pause)
+        layout_bar.addWidget(self.btn_vid_stop)
+        layout_bar.addWidget(self.btn_step_back)
+        layout_bar.addWidget(self.btn_step_fwd)
+        layout_bar.addWidget(self.lbl_time_code)
+        layout_bar.addStretch()
+
+        # Marcadores In / Out
+        self.btn_mark_in = QPushButton(" 🚩 Fijar Inicio (In)")
+        self.btn_mark_in.setToolTip("Fija la posición actual del video como inicio del segmento")
+        self.btn_mark_in.setStyleSheet("padding: 4px 8px;")
+        self.btn_mark_in.clicked.connect(self._on_mark_in_clicked)
+
+        self.btn_mark_out = QPushButton(" 🏁 Fijar Fin (Out)")
+        self.btn_mark_out.setToolTip("Fija la posición actual del video como final del segmento")
+        self.btn_mark_out.setStyleSheet("padding: 4px 8px;")
+        self.btn_mark_out.clicked.connect(self._on_mark_out_clicked)
+
+        self.lbl_marker_status = QLabel("In: --:--.-- | Out: --:--.--")
+        self.lbl_marker_status.setStyleSheet("color: #94a3b8; font-size: 11px; font-family: monospace; padding: 0 4px;")
+
+        self.btn_add_marked_seg = QPushButton(" ➕ Agregar Segmento")
+        self.btn_add_marked_seg.setToolTip("Añade el segmento delimitado por In y Out (o desde el cursor actual)")
+        self.btn_add_marked_seg.setStyleSheet(
+            "background-color: #0284c7; color: white; font-weight: bold; padding: 4px 12px; border-radius: 4px;"
+        )
+        self.btn_add_marked_seg.clicked.connect(self._on_add_marked_segment_clicked)
+
+        layout_bar.addWidget(self.btn_mark_in)
+        layout_bar.addWidget(self.btn_mark_out)
+        layout_bar.addWidget(self.lbl_marker_status)
+        layout_bar.addWidget(self.btn_add_marked_seg)
+
+        layout_preview.addWidget(bar_controls)
+        layout_adv.addWidget(group_preview)
+
+        # B) Selector Gráfico en Línea de Tiempo
         guide_txt = (
-            "✂️ <b>Selector Gráfico de Video:</b> Haz clic en la regla o arrastra el marcador rojo (triángulo superior) para ubicar la posición. "
-            "Arrastra con el ratón sobre la onda para marcar los segmentos de video deseados y ajusta sus bordes con las manijas. "
+            "✂️ <b>Selector Gráfico de Video:</b> Haz clic en la regla o arrastra el marcador rojo para ubicar el fotograma exacto. "
+            "Arrastra sobre la onda con el ratón para marcar los segmentos deseados o usa los botones <b>🚩 Fijar Inicio</b> y <b>🏁 Fijar Fin</b>. "
             "Usa los botones de Zoom o <b>Ctrl + Rueda</b> para máxima precisión."
         )
         self.timeline_widget = AudioSegmentSelectorWidget(guide_text=guide_txt, parent=self)
@@ -277,9 +407,45 @@ class TabSegment(QWidget):
         self.timeline_widget.play_requested.connect(self._on_timeline_play_selection_requested)
         self.timeline_widget.stop_requested.connect(self._on_timeline_stop_requested)
         self.timeline_widget.seek_requested.connect(self._on_timeline_seek_requested)
+        self.timeline_widget.segments_updated.connect(self._sync_segments_table)
         self.timeline_widget.segments_updated.connect(lambda _: self._update_estimate())
         self.timeline_widget.segments_updated.connect(lambda _: self._update_command_preview())
         layout_adv.addWidget(self.timeline_widget)
+
+        # C) Tabla de Segmentos Marcados
+        group_table = QGroupBox("Segmentos Marcados para Extraer")
+        layout_table = QVBoxLayout(group_table)
+        layout_table.setContentsMargins(8, 8, 8, 8)
+        layout_table.setSpacing(6)
+
+        self.table_segments = QTableWidget(0, 5)
+        self.table_segments.setHorizontalHeaderLabels(["#", "Punto Inicio", "Punto Fin", "Duración", "Acciones"])
+        self.table_segments.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table_segments.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table_segments.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.table_segments.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.table_segments.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table_segments.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table_segments.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table_segments.setMaximumHeight(150)
+        self.table_segments.cellClicked.connect(self._on_table_segment_clicked)
+
+        h_tbl_actions = QHBoxLayout()
+        self.lbl_table_summary = QLabel("Ningún segmento marcado aún.")
+        self.lbl_table_summary.setStyleSheet("color: #38bdf8; font-weight: 500;")
+
+        self.btn_clear_all_segs = QPushButton(" 🗑️ Borrar Todos")
+        self.btn_clear_all_segs.setToolTip("Eliminar todos los segmentos de la lista")
+        self.btn_clear_all_segs.setStyleSheet("padding: 3px 8px;")
+        self.btn_clear_all_segs.clicked.connect(self._clear_all_segments)
+
+        h_tbl_actions.addWidget(self.lbl_table_summary)
+        h_tbl_actions.addStretch()
+        h_tbl_actions.addWidget(self.btn_clear_all_segs)
+
+        layout_table.addWidget(self.table_segments)
+        layout_table.addLayout(h_tbl_actions)
+        layout_adv.addWidget(group_table)
 
         self.panel_advanced.setVisible(False)
         layout_opts.addWidget(self.panel_advanced)
@@ -391,6 +557,9 @@ class TabSegment(QWidget):
             self.btn_run.setText("Extraer Segmentos Seleccionados")
         else:
             self.btn_run.setText("Dividir Video en Segmentos")
+            # Detener reproducción si el usuario cambia a modo automático
+            if self.player.state() == QMediaPlayer.PlayingState:
+                self.player.pause()
 
         self._update_estimate()
         self._update_command_preview()
@@ -401,14 +570,25 @@ class TabSegment(QWidget):
         if hasattr(self, "_smooth_timer"):
             self._smooth_timer.stop()
 
+        self.mark_in_sec = None
+        self.mark_out_sec = None
+        if hasattr(self, "lbl_marker_status"):
+            self.lbl_marker_status.setText("In: --:--.-- | Out: --:--.--")
+
         if not path or not os.path.isfile(path):
             self.lbl_info.setText("Duración: --:--:-- | Resolución: -- x --")
             self.media_duration = 0.0
+            if hasattr(self, "video_widget"):
+                self.video_widget.setVisible(False)
+            if hasattr(self, "lbl_video_placeholder"):
+                self.lbl_video_placeholder.setVisible(True)
             if hasattr(self, "timeline_widget"):
                 self.timeline_widget.canvas.set_media(0.0, None)
                 self.timeline_widget.set_segments([])
+            self._sync_segments_table([])
             self._update_estimate()
             self._update_command_preview()
+            self._update_timecode_display(0.0)
             return
 
         ffmpeg_path, ffprobe_path = self.get_ffmpeg_paths()
@@ -423,12 +603,33 @@ class TabSegment(QWidget):
         p = Path(path)
         self.edit_pattern.setText(f"{p.stem}_part_%03d{p.suffix}")
 
+        # Mostrar visor de video y cargar medio en QMediaPlayer
+        if hasattr(self, "video_widget"):
+            self.video_widget.setVisible(True)
+        if hasattr(self, "lbl_video_placeholder"):
+            self.lbl_video_placeholder.setVisible(False)
+
+        content = QMediaContent(QUrl.fromLocalFile(os.path.abspath(path)))
+        self.player.setMedia(content)
+        # Breve pausa para forzar al decodificador a renderizar el primer fotograma en QVideoWidget
+        self.player.pause()
+        self.player.setPosition(0)
+
         # Cargar onda en el selector de línea de tiempo interactiva
         if hasattr(self, "timeline_widget") and ffmpeg_path:
             self.timeline_widget.load_audio_file(ffmpeg_path, path, self.media_duration)
 
+        self._sync_segments_table([])
+        self._update_timecode_display(0.0)
         self._update_folder_suggestion()
         self._update_estimate()
+
+    def _on_player_media_status_changed(self, status):
+        # Cuando el medio esté completamente cargado y con buffer, asegurar que se muestre el primer fotograma
+        if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
+            if self.player.state() != QMediaPlayer.PlayingState:
+                self.player.setPosition(0)
+                self.player.pause()
 
     def _on_use_base_changed(self):
         use_base = self.chk_use_base.isChecked()
@@ -491,7 +692,7 @@ class TabSegment(QWidget):
             # Modo Avanzado Manual
             segs = self.timeline_widget.get_segments() if hasattr(self, "timeline_widget") else []
             if not segs:
-                self.cmd_preview.set_command("Modo Avanzado: Marque uno o más segmentos arrastrando sobre la línea de tiempo gráfica.")
+                self.cmd_preview.set_command("Modo Avanzado: Marque uno o más segmentos arrastrando sobre la línea de tiempo o con 'Fijar Inicio' y 'Fijar Fin'.")
                 return
 
             preview_lines = []
@@ -539,7 +740,44 @@ class TabSegment(QWidget):
             else:
                 self.lbl_estimate.setText("Segmentos estimados: ~0")
 
-    # Métodos de reproducción e interacción con la línea de tiempo
+    def _update_timecode_display(self, current_sec: float):
+        if hasattr(self, "lbl_time_code"):
+            cur_str = format_seconds_exact(current_sec)
+            tot_str = format_seconds_exact(self.media_duration)
+            self.lbl_time_code.setText(f"{cur_str} / {tot_str}")
+
+    # =========================================================================
+    # Métodos de Reproducción de Video e Interacción con Línea de Tiempo
+    # =========================================================================
+    def _toggle_video_playback(self):
+        """Alterna entre reproducción y pausa usando la posición actual del playhead."""
+        if self.player.state() == QMediaPlayer.PlayingState:
+            self._stop_video_playback()
+        else:
+            cur_sec = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+            self._on_timeline_play_normal_requested(cur_sec)
+
+    def _stop_video_playback(self):
+        """Pausa la reproducción y conserva la posición actual del fotograma."""
+        self._smooth_timer.stop()
+        self._timeline_stop_ms = None
+        cur_pos_sec = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        self.player.pause()
+        if hasattr(self, "timeline_widget"):
+            self.timeline_widget.set_playing_state(False)
+            self.timeline_widget.set_playhead_pos(cur_pos_sec)
+        self.btn_vid_play_pause.setText(" Reproducir")
+        self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self.progress_widget.set_status("Reproducción pausada.")
+
+    def _step_time(self, delta_sec: float):
+        """Avanza o retrocede delta_sec segundos en el video actualizando fotograma y aguja."""
+        cur_sec = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        new_sec = max(0.0, min(self.media_duration, cur_sec + delta_sec))
+        self._on_timeline_seek_requested(new_sec)
+        if hasattr(self, "timeline_widget"):
+            self.timeline_widget.set_playhead_pos(new_sec)
+
     def _on_smooth_playhead_tick(self):
         if self.player.state() != QMediaPlayer.PlayingState:
             self._smooth_timer.stop()
@@ -556,6 +794,9 @@ class TabSegment(QWidget):
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
+                self.btn_vid_play_pause.setText(" Reproducir")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                self._update_timecode_display(stop_sec)
                 return
 
         if self.media_duration > 0 and est_sec >= self.media_duration:
@@ -564,9 +805,13 @@ class TabSegment(QWidget):
             self.player.pause()
             self.timeline_widget.set_playhead_pos(self.media_duration)
             self.timeline_widget.set_playing_state(False)
+            self.btn_vid_play_pause.setText(" Reproducir")
+            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self._update_timecode_display(self.media_duration)
             return
 
         self.timeline_widget.set_playhead_pos(est_sec)
+        self._update_timecode_display(est_sec)
 
     def _on_timeline_play_normal_requested(self, start_sec: float):
         input_path = self.input_selector.get_path()
@@ -577,9 +822,6 @@ class TabSegment(QWidget):
         try:
             self._timeline_stop_ms = None
             self._smooth_timer.stop()
-            self.player.stop()
-            content = QMediaContent(QUrl.fromLocalFile(input_path))
-            self.player.setMedia(content)
             self.player.setPosition(int(start_sec * 1000))
             self.player.play()
 
@@ -589,7 +831,10 @@ class TabSegment(QWidget):
 
             self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="normal")
+            self.btn_vid_play_pause.setText(" Pausar")
+            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
             self.progress_widget.set_status("Reproduciendo video normalmente...")
+            self._update_timecode_display(start_sec)
         except Exception:
             self._smooth_timer.stop()
             self.timeline_widget.set_playing_state(False)
@@ -603,9 +848,6 @@ class TabSegment(QWidget):
         try:
             self._timeline_stop_ms = int(end_sec * 1000)
             self._smooth_timer.stop()
-            self.player.stop()
-            content = QMediaContent(QUrl.fromLocalFile(input_path))
-            self.player.setMedia(content)
             self.player.setPosition(int(start_sec * 1000))
             self.player.play()
 
@@ -615,24 +857,22 @@ class TabSegment(QWidget):
 
             self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="selection")
+            self.btn_vid_play_pause.setText(" Pausar")
+            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
             self.progress_widget.set_status(f"Reproduciendo selección ({end_sec - start_sec:.2f}s)...")
+            self._update_timecode_display(start_sec)
         except Exception:
             self._smooth_timer.stop()
             self.timeline_widget.set_playing_state(False)
 
     def _on_timeline_stop_requested(self):
-        self._smooth_timer.stop()
-        self._timeline_stop_ms = None
-        cur_pos_sec = self.timeline_widget.canvas.playhead_pos
-        self.player.pause()
-        self.timeline_widget.set_playing_state(False)
-        self.timeline_widget.set_playhead_pos(cur_pos_sec)
-        self.progress_widget.set_status("Reproducción detenida.")
+        self._stop_video_playback()
 
     def _on_timeline_seek_requested(self, sec: float):
         self._play_sync_pos = float(sec)
         self._play_sync_perf = time.perf_counter()
         self.player.setPosition(int(sec * 1000))
+        self._update_timecode_display(sec)
 
     def _on_player_position_changed(self, pos_ms: int):
         if self.player.state() != QMediaPlayer.PlayingState:
@@ -642,6 +882,7 @@ class TabSegment(QWidget):
             real_sec = pos_ms / 1000.0
             self._play_sync_pos = real_sec
             self._play_sync_perf = time.perf_counter()
+            self._update_timecode_display(real_sec)
 
             if hasattr(self, "_timeline_stop_ms") and self._timeline_stop_ms is not None and pos_ms >= self._timeline_stop_ms:
                 stop_sec = self._timeline_stop_ms / 1000.0
@@ -650,13 +891,184 @@ class TabSegment(QWidget):
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
+                self.btn_vid_play_pause.setText(" Reproducir")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                self._update_timecode_display(stop_sec)
 
     def _on_player_state_changed(self, state):
         if state != QMediaPlayer.PlayingState:
             self._smooth_timer.stop()
             if hasattr(self, "timeline_widget"):
                 self.timeline_widget.set_playing_state(False)
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Reproducir")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        else:
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Pausar")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
 
+    # =========================================================================
+    # Marcadores In / Out y Sincronización de Tabla de Segmentos
+    # =========================================================================
+    def _on_mark_in_clicked(self):
+        """Fija la posición actual del video como punto In (inicio)."""
+        cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        self.mark_in_sec = cur
+        out_str = format_seconds_exact(self.mark_out_sec) if self.mark_out_sec is not None else "--:--.--"
+        self.lbl_marker_status.setText(f"In: {format_seconds_exact(cur)} | Out: {out_str}")
+        self.progress_widget.set_status(f"Punto de inicio fijado en {format_seconds_exact(cur)}")
+
+    def _on_mark_out_clicked(self):
+        """Fija la posición actual del video como punto Out (fin)."""
+        cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        self.mark_out_sec = cur
+        in_str = format_seconds_exact(self.mark_in_sec) if self.mark_in_sec is not None else "--:--.--"
+        self.lbl_marker_status.setText(f"In: {in_str} | Out: {format_seconds_exact(cur)}")
+        self.progress_widget.set_status(f"Punto final fijado en {format_seconds_exact(cur)}")
+
+    def _on_add_marked_segment_clicked(self):
+        """Añade un segmento delimitado por In y Out, o basado en el cursor actual."""
+        cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+
+        if self.mark_in_sec is not None and self.mark_out_sec is not None:
+            st = min(self.mark_in_sec, self.mark_out_sec)
+            en = max(self.mark_in_sec, self.mark_out_sec)
+        elif self.mark_in_sec is not None:
+            st = self.mark_in_sec
+            en = cur if cur > st + 0.2 else (min(self.media_duration, st + 10.0) if self.media_duration > 0 else st + 10.0)
+        elif self.mark_out_sec is not None:
+            en = self.mark_out_sec
+            st = cur if cur < en - 0.2 else max(0.0, en - 10.0)
+        else:
+            # Añadir un segmento por defecto de 10s desde el cursor actual
+            st = cur
+            en = min(self.media_duration, cur + 10.0) if self.media_duration > cur + 0.5 else max(0.0, cur - 10.0)
+            if en < st:
+                st, en = en, st
+
+        if en - st < 0.2:
+            QMessageBox.information(
+                self, "Segmento Demasiado Corto",
+                "El segmento a marcar debe tener una duración de al menos 0.20 segundos."
+            )
+            return
+
+        cur_segs = list(self.timeline_widget.get_segments())
+        cur_segs.append((round(st, 2), round(en, 2)))
+        self.timeline_widget.set_segments(cur_segs)
+        self._sync_segments_table(self.timeline_widget.get_segments())
+        self._update_estimate()
+        self._update_command_preview()
+
+        self.mark_in_sec = None
+        self.mark_out_sec = None
+        self.lbl_marker_status.setText("In: --:--.-- | Out: --:--.--")
+        self.progress_widget.set_status(f"Segmento #{len(cur_segs)} agregado: {format_seconds_exact(st)} a {format_seconds_exact(en)}")
+
+    def _sync_segments_table(self, segs: Optional[List[Tuple[float, float]]] = None):
+        """Sincroniza la tabla de visualización con los segmentos de la línea de tiempo."""
+        if not hasattr(self, "table_segments"):
+            return
+
+        if segs is None:
+            segs = self.timeline_widget.get_segments() if hasattr(self, "timeline_widget") else []
+
+        self.table_segments.blockSignals(True)
+        self.table_segments.setRowCount(0)
+
+        total_dur = 0.0
+        for idx, (st, en) in enumerate(segs, start=1):
+            dur = max(0.0, en - st)
+            total_dur += dur
+            row = self.table_segments.rowCount()
+            self.table_segments.insertRow(row)
+
+            # Col 0: #
+            item_num = QTableWidgetItem(f"#{idx}")
+            item_num.setTextAlignment(Qt.AlignCenter)
+            self.table_segments.setItem(row, 0, item_num)
+
+            # Col 1: Inicio
+            item_st = QTableWidgetItem(format_seconds_exact(st))
+            item_st.setTextAlignment(Qt.AlignCenter)
+            self.table_segments.setItem(row, 1, item_st)
+
+            # Col 2: Fin
+            item_en = QTableWidgetItem(format_seconds_exact(en))
+            item_en.setTextAlignment(Qt.AlignCenter)
+            self.table_segments.setItem(row, 2, item_en)
+
+            # Col 3: Duración
+            item_dur = QTableWidgetItem(f"{dur:.2f} s")
+            item_dur.setTextAlignment(Qt.AlignCenter)
+            self.table_segments.setItem(row, 3, item_dur)
+
+            # Col 4: Botones Previsualizar y Eliminar
+            cell_widget = QWidget()
+            layout_cell = QHBoxLayout(cell_widget)
+            layout_cell.setContentsMargins(4, 2, 4, 2)
+            layout_cell.setSpacing(6)
+
+            btn_prev = QPushButton("▶ Ver")
+            btn_prev.setToolTip(f"Previsualizar fotogramas del segmento #{idx}")
+            btn_prev.setStyleSheet("padding: 2px 6px; font-size: 11px;")
+            btn_prev.clicked.connect(lambda _, s=st, e=en: self._on_timeline_play_selection_requested(s, e))
+
+            btn_del = QPushButton("🗑️")
+            btn_del.setToolTip(f"Eliminar segmento #{idx}")
+            btn_del.setStyleSheet("padding: 2px 6px; font-size: 11px;")
+            btn_del.clicked.connect(lambda _, i=idx - 1: self._delete_segment_by_index(i))
+
+            layout_cell.addWidget(btn_prev)
+            layout_cell.addWidget(btn_del)
+            layout_cell.addStretch()
+
+            self.table_segments.setCellWidget(row, 4, cell_widget)
+
+        self.table_segments.blockSignals(False)
+
+        if hasattr(self, "lbl_table_summary"):
+            count = len(segs)
+            if count == 0:
+                self.lbl_table_summary.setText("Ningún segmento marcado aún.")
+            else:
+                self.lbl_table_summary.setText(
+                    f"<b>{count}</b> segmento{'s' if count != 1 else ''} marcado{'s' if count != 1 else ''} | "
+                    f"Duración acumulada: <b>{format_seconds_exact(total_dur)}</b> ({total_dur:.2f}s)"
+                )
+
+    def _delete_segment_by_index(self, index: int):
+        """Elimina el segmento dado por su índice y refresca la interfaz."""
+        segs = list(self.timeline_widget.get_segments())
+        if 0 <= index < len(segs):
+            segs.pop(index)
+            self.timeline_widget.set_segments(segs)
+            self._sync_segments_table(segs)
+            self._update_estimate()
+            self._update_command_preview()
+
+    def _clear_all_segments(self):
+        """Elimina todos los segmentos marcados en la línea de tiempo."""
+        self.timeline_widget.set_segments([])
+        self._sync_segments_table([])
+        self._update_estimate()
+        self._update_command_preview()
+
+    def _on_table_segment_clicked(self, row: int, col: int):
+        """Al hacer clic en una fila de la tabla, salta el reproductor y la aguja al inicio del segmento."""
+        segs = self.timeline_widget.get_segments()
+        if 0 <= row < len(segs):
+            st, en = segs[row]
+            if hasattr(self.timeline_widget, "canvas"):
+                self.timeline_widget.canvas.selected_idx = row
+                self.timeline_widget.canvas.update()
+            self._on_timeline_seek_requested(st)
+            self.timeline_widget.set_playhead_pos(st)
+
+    # =========================================================================
+    # Ejecución de Segmentación
+    # =========================================================================
     def _start_segmenting(self):
         in_path = self.input_selector.get_path()
         out_folder = self.folder_selector.get_path()
@@ -737,6 +1149,17 @@ class TabSegment(QWidget):
     def _cancel(self):
         if self.worker:
             self.worker.cancel()
+
+    def cleanup_media(self):
+        """Libera los recursos del reproductor multimedia y desbloquea el archivo de video en el SO."""
+        if hasattr(self, "_smooth_timer"):
+            self._smooth_timer.stop()
+        if hasattr(self, "player") and self.player:
+            try:
+                self.player.stop()
+                self.player.setMedia(QMediaContent())
+            except Exception:
+                pass
 
     def _on_finished(self, success: bool, message: str, out_path: str):
         self.btn_run.setEnabled(True)

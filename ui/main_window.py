@@ -355,6 +355,11 @@ class MainWindow(QMainWindow):
                         tab._cleanup_playback_procs()
                     except Exception:
                         pass
+                if hasattr(tab, "cleanup_media"):
+                    try:
+                        tab.cleanup_media()
+                    except Exception:
+                        pass
         event.accept()
         super().closeEvent(event)
 
