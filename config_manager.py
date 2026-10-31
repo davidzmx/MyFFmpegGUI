@@ -296,7 +296,7 @@ def load_config() -> dict:
         "auto_suggest_subfolders": True,
         "default_save_location": "same_folder",  # "same_folder" o "base_dir"
         "console_panel_position": "bottom",       # "bottom" (inferior) o "side" (lateral)
-        "console_panel_visible": True,            # True (visible) o False (oculto)
+        "console_panel_visible": False,           # True (visible) o False (oculto por defecto)
         "context_menu_actions": [dict(a) for a in DEFAULT_CONTEXT_ACTIONS]
     }
     cfg_path = get_config_file_path()
@@ -528,7 +528,7 @@ def set_console_panel_position(pos: str):
 def get_console_panel_visible() -> bool:
     """Indica si el panel de comando y consola debe estar visible."""
     cfg = load_config()
-    return bool(cfg.get("console_panel_visible", True))
+    return bool(cfg.get("console_panel_visible", False))
 
 
 def set_console_panel_visible(visible: bool):

@@ -29,6 +29,28 @@ import config_manager
 from ffmpeg_worker import FFmpegWorker
 
 
+def format_duration_human(sec: float) -> str:
+    """Formatea una duración en segundos mostrando segundos, minutos u horas según su magnitud."""
+    sec = max(0.0, float(sec))
+    if sec < 60.0:
+        return f"{sec:.2f} seg"
+    elif sec < 3600.0:
+        mins = int(sec // 60)
+        rem_sec = sec % 60.0
+        if rem_sec < 0.01:
+            return f"{mins} min"
+        return f"{mins} min {rem_sec:.2f} seg"
+    else:
+        hours = int(sec // 3600)
+        mins = int((sec % 3600) // 60)
+        rem_sec = sec % 60.0
+        if mins == 0 and rem_sec < 0.01:
+            return f"{hours} h"
+        elif rem_sec < 0.01:
+            return f"{hours} h {mins} min"
+        return f"{hours} h {mins} min {rem_sec:.1f} seg"
+
+
 class ClickableVideoWidget(QVideoWidget):
     """
     Visor de video de QVideoWidget que permite hacer clic directo sobre la imagen
@@ -203,6 +225,7 @@ class TabSegment(QWidget):
         self.mark_in_sec: Optional[float] = None
         self.mark_out_sec: Optional[float] = None
         self._expected_seek_pos_ms: Optional[int] = None
+        self._playing_table_row: Optional[int] = None
 
         # Reproductor interno con salida de video para la línea de tiempo interactiva
         self.player = QMediaPlayer(self)
@@ -406,7 +429,6 @@ class TabSegment(QWidget):
         self.timeline_widget = AudioSegmentSelectorWidget(guide_text=guide_txt, parent=self)
         self.timeline_widget.play_normal_requested.connect(self._on_timeline_play_normal_requested)
         self.timeline_widget.play_selection_requested.connect(self._on_timeline_play_selection_requested)
-        self.timeline_widget.play_requested.connect(self._on_timeline_play_selection_requested)
         self.timeline_widget.stop_requested.connect(self._on_timeline_stop_requested)
         self.timeline_widget.seek_requested.connect(self._on_timeline_seek_requested)
         self.timeline_widget.segments_updated.connect(self._sync_segments_table)
@@ -678,6 +700,7 @@ class TabSegment(QWidget):
         elif status == QMediaPlayer.EndOfMedia:
             self._smooth_timer.stop()
             self._timeline_stop_ms = None
+            self._playing_table_row = None
             self.player.pause()
             if hasattr(self, "timeline_widget"):
                 self.timeline_widget.set_playing_state(False)
@@ -685,6 +708,7 @@ class TabSegment(QWidget):
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Reproducir")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self._update_table_preview_buttons()
             self._update_timecode_display(self.media_duration)
 
     def _on_use_base_changed(self):
@@ -787,7 +811,7 @@ class TabSegment(QWidget):
             segs = self.timeline_widget.get_segments() if hasattr(self, "timeline_widget") else []
             count = len(segs)
             tot_dur = sum((en - st) for st, en in segs)
-            self.lbl_estimate.setText(f"Segmentos marcados: {count} ({tot_dur:.2f} seg total)")
+            self.lbl_estimate.setText(f"Segmentos marcados: {count} ({format_duration_human(tot_dur)} total)")
         else:
             seg_sec = self.spin_seconds.value()
             if self.media_duration > 0 and seg_sec > 0:
@@ -821,6 +845,7 @@ class TabSegment(QWidget):
         """Pausa la reproducción y conserva la posición actual del fotograma."""
         self._smooth_timer.stop()
         self._timeline_stop_ms = None
+        self._playing_table_row = None
         cur_pos_sec = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
         self.player.pause()
         if hasattr(self, "timeline_widget"):
@@ -829,6 +854,7 @@ class TabSegment(QWidget):
         if hasattr(self, "btn_vid_play_pause"):
             self.btn_vid_play_pause.setText(" Reproducir")
             self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        self._update_table_preview_buttons()
         self.progress_widget.set_status("Reproducción pausada.")
 
     def _step_time(self, delta_sec: float):
@@ -852,24 +878,28 @@ class TabSegment(QWidget):
             if est_sec >= stop_sec:
                 self._smooth_timer.stop()
                 self._timeline_stop_ms = None
+                self._playing_table_row = None
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
                 if hasattr(self, "btn_vid_play_pause"):
                     self.btn_vid_play_pause.setText(" Reproducir")
                     self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                self._update_table_preview_buttons()
                 self._update_timecode_display(stop_sec)
                 return
 
         if self.media_duration > 0 and est_sec >= self.media_duration:
             self._smooth_timer.stop()
             self._timeline_stop_ms = None
+            self._playing_table_row = None
             self.player.pause()
             self.timeline_widget.set_playhead_pos(self.media_duration)
             self.timeline_widget.set_playing_state(False)
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Reproducir")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self._update_table_preview_buttons()
             self._update_timecode_display(self.media_duration)
             return
 
@@ -888,6 +918,7 @@ class TabSegment(QWidget):
                 start_sec = 0.0
 
             self._timeline_stop_ms = None
+            self._playing_table_row = None
             self._smooth_timer.stop()
 
             target_ms = int(start_sec * 1000)
@@ -907,19 +938,31 @@ class TabSegment(QWidget):
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Pausar")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self._update_table_preview_buttons()
             self.progress_widget.set_status("Reproduciendo video normalmente...")
             self._update_timecode_display(start_sec)
         except Exception:
             self._smooth_timer.stop()
+            self._playing_table_row = None
             self.timeline_widget.set_playing_state(False)
+            self._update_table_preview_buttons()
 
-    def _on_timeline_play_selection_requested(self, start_sec: float, end_sec: float):
+    def _on_timeline_play_selection_requested(self, start_sec: float, end_sec: float, table_row: Optional[int] = None):
         input_path = self.input_selector.get_path()
         if not input_path or not os.path.isfile(input_path):
+            self._playing_table_row = None
             self.timeline_widget.set_playing_state(False)
+            self._update_table_preview_buttons()
             return
 
         try:
+            if table_row is None and hasattr(self, "timeline_widget"):
+                segs = self.timeline_widget.get_segments()
+                target_pair = (round(start_sec, 2), round(end_sec, 2))
+                if target_pair in segs:
+                    table_row = segs.index(target_pair)
+
+            self._playing_table_row = table_row
             self._timeline_stop_ms = int(end_sec * 1000)
             self._smooth_timer.stop()
 
@@ -940,11 +983,14 @@ class TabSegment(QWidget):
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Pausar")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
-            self.progress_widget.set_status(f"Reproduciendo selección ({end_sec - start_sec:.2f}s)...")
+            self._update_table_preview_buttons()
+            self.progress_widget.set_status(f"Reproduciendo selección ({format_duration_human(end_sec - start_sec)})...")
             self._update_timecode_display(start_sec)
         except Exception:
             self._smooth_timer.stop()
+            self._playing_table_row = None
             self.timeline_widget.set_playing_state(False)
+            self._update_table_preview_buttons()
 
     def _on_timeline_stop_requested(self):
         self._stop_video_playback()
@@ -979,26 +1025,31 @@ class TabSegment(QWidget):
                 stop_sec = self._timeline_stop_ms / 1000.0
                 self._smooth_timer.stop()
                 self._timeline_stop_ms = None
+                self._playing_table_row = None
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
                 if hasattr(self, "btn_vid_play_pause"):
                     self.btn_vid_play_pause.setText(" Reproducir")
                     self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                self._update_table_preview_buttons()
                 self._update_timecode_display(stop_sec)
 
     def _on_player_state_changed(self, state):
         if state != QMediaPlayer.PlayingState:
             self._smooth_timer.stop()
+            self._playing_table_row = None
             if hasattr(self, "timeline_widget"):
                 self.timeline_widget.set_playing_state(False)
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Reproducir")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self._update_table_preview_buttons()
         else:
             if hasattr(self, "btn_vid_play_pause"):
                 self.btn_vid_play_pause.setText(" Pausar")
                 self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            self._update_table_preview_buttons()
 
     # =========================================================================
     # Marcadores In / Out y Sincronización de Tabla de Segmentos
@@ -1156,27 +1207,37 @@ class TabSegment(QWidget):
             item_en.setTextAlignment(Qt.AlignCenter)
             self.table_segments.setItem(row, 2, item_en)
 
-            # Col 3: Duración
-            item_dur = QTableWidgetItem(f"{dur:.2f} s")
+            # Col 3: Duración (calculada dinámicamente en segundos, minutos u horas)
+            item_dur = QTableWidgetItem(format_duration_human(dur))
             item_dur.setTextAlignment(Qt.AlignCenter)
             self.table_segments.setItem(row, 3, item_dur)
 
-            # Col 4: Botones Previsualizar y Eliminar
+            # Col 4: Botones Previsualizar/Detener y Eliminar
             cell_widget = QWidget()
-            cell_widget.setMinimumWidth(115)
+            cell_widget.setMinimumWidth(140)
             layout_cell = QHBoxLayout(cell_widget)
             layout_cell.setContentsMargins(6, 2, 6, 2)
             layout_cell.setSpacing(6)
 
-            btn_prev = QPushButton("▶ Ver")
-            btn_prev.setToolTip(f"Previsualizar fotogramas del segmento #{idx}")
-            btn_prev.setStyleSheet("padding: 2px 8px; font-size: 11px;")
-            btn_prev.clicked.connect(lambda _, s=st, e=en: self._on_timeline_play_selection_requested(s, e))
+            row_idx = idx - 1
+            is_row_playing = (
+                self.player.state() == QMediaPlayer.PlayingState
+                and getattr(self, "_playing_table_row", None) == row_idx
+            )
+            btn_prev = QPushButton("⏹ Detener" if is_row_playing else "▶ Ver")
+            if is_row_playing:
+                btn_prev.setToolTip(f"Detener reproducción del segmento #{idx}")
+                btn_prev.setStyleSheet("padding: 2px 8px; font-size: 11px; font-weight: bold; background-color: #dc2626; color: white;")
+            else:
+                btn_prev.setToolTip(f"Previsualizar fotogramas del segmento #{idx}")
+                btn_prev.setStyleSheet("padding: 2px 8px; font-size: 11px;")
+            btn_prev.clicked.connect(lambda _, r=row_idx, s=st, e=en: self._on_table_preview_clicked(r, s, e))
+            cell_widget.btn_prev = btn_prev
 
             btn_del = QPushButton("🗑️")
             btn_del.setToolTip(f"Eliminar segmento #{idx}")
             btn_del.setStyleSheet("padding: 2px 6px; font-size: 11px;")
-            btn_del.clicked.connect(lambda _, i=idx - 1: self._delete_segment_by_index(i))
+            btn_del.clicked.connect(lambda _, i=row_idx: self._delete_segment_by_index(i))
 
             layout_cell.addStretch()
             layout_cell.addWidget(btn_prev)
@@ -1194,8 +1255,37 @@ class TabSegment(QWidget):
             else:
                 self.lbl_table_summary.setText(
                     f"<b>{count}</b> segmento{'s' if count != 1 else ''} marcado{'s' if count != 1 else ''} | "
-                    f"Duración acumulada: <b>{format_seconds_exact(total_dur)}</b> ({total_dur:.2f}s)"
+                    f"Duración acumulada: <b>{format_seconds_exact(total_dur)}</b> ({format_duration_human(total_dur)})"
                 )
+
+    def _on_table_preview_clicked(self, row_idx: int, st: float, en: float):
+        """Alterna entre previsualizar el segmento de la fila y detener su reproducción."""
+        if (
+            getattr(self, "_playing_table_row", None) == row_idx
+            and (self.player.state() == QMediaPlayer.PlayingState or self._smooth_timer.isActive())
+        ):
+            self._stop_video_playback()
+            return
+        self._on_timeline_play_selection_requested(st, en, table_row=row_idx)
+
+    def _update_table_preview_buttons(self):
+        """Actualiza el botón de acción ('▶ Ver' vs '⏹ Detener') en cada fila de la tabla."""
+        if not hasattr(self, "table_segments"):
+            return
+        active_row = getattr(self, "_playing_table_row", None)
+        is_playing = (self.player.state() == QMediaPlayer.PlayingState or self._smooth_timer.isActive())
+        for r in range(self.table_segments.rowCount()):
+            cell_w = self.table_segments.cellWidget(r, 4)
+            btn = getattr(cell_w, "btn_prev", None) if cell_w else None
+            if btn is not None:
+                if is_playing and active_row == r:
+                    btn.setText("⏹ Detener")
+                    btn.setToolTip(f"Detener reproducción del segmento #{r + 1}")
+                    btn.setStyleSheet("padding: 2px 8px; font-size: 11px; font-weight: bold; background-color: #dc2626; color: white;")
+                else:
+                    btn.setText("▶ Ver")
+                    btn.setToolTip(f"Previsualizar fotogramas del segmento #{r + 1}")
+                    btn.setStyleSheet("padding: 2px 8px; font-size: 11px;")
 
     def _delete_segment_by_index(self, index: int):
         """Elimina el segmento dado por su índice y refresca la interfaz."""

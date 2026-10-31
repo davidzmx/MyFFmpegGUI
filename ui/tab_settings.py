@@ -257,7 +257,7 @@ class TabSettings(QWidget):
         layout_panel.addLayout(h_pos)
 
         self.chk_panel_visible = QCheckBox("Mostrar panel de comando y terminal al iniciar")
-        self.chk_panel_visible.setChecked(True)
+        self.chk_panel_visible.setChecked(False)
         self.chk_panel_visible.setStyleSheet("font-weight: bold; color: #a5b4fc;")
         layout_panel.addWidget(self.chk_panel_visible)
 
@@ -502,7 +502,7 @@ class TabSettings(QWidget):
             self.radio_panel_side.setChecked(True)
         else:
             self.radio_panel_bottom.setChecked(True)
-        self.chk_panel_visible.setChecked(bool(cfg.get("console_panel_visible", True)))
+        self.chk_panel_visible.setChecked(bool(cfg.get("console_panel_visible", False)))
 
         self._update_preview_label()
         self._test_version()

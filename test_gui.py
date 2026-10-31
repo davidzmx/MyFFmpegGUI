@@ -613,6 +613,21 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 1)
         self.assertEqual(seg_tab.table_segments.rowCount(), 1)
 
+        # Probar formato dinámico de duración (segundos, minutos, horas) y botón alternable ▶ Ver / ⏹ Detener
+        from ui.tab_segment import format_duration_human
+        self.assertEqual(format_duration_human(25.03), "25.03 seg")
+        self.assertEqual(format_duration_human(120.0), "2 min")
+        self.assertEqual(format_duration_human(135.5), "2 min 15.50 seg")
+        self.assertEqual(format_duration_human(3665.2), "1 h 1 min 5.2 seg")
+
+        cell_w = seg_tab.table_segments.cellWidget(0, 4)
+        self.assertIsNotNone(cell_w)
+        self.assertEqual(cell_w.btn_prev.text(), "▶ Ver")
+        cell_w.btn_prev.click()
+        self.assertEqual(cell_w.btn_prev.text(), "⏹ Detener")
+        cell_w.btn_prev.click()
+        self.assertEqual(cell_w.btn_prev.text(), "▶ Ver")
+
         cmd_cut_exact = ffmpeg_core.build_cut_video_segment_command(
             self.ffmpeg_path, self.test_video, "cut_test.mp4", 0.5, 2.0, mode="exact"
         )
@@ -1194,8 +1209,8 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(config_manager.get_console_panel_position(), "side")
         self.assertFalse(config_manager.get_console_panel_visible())
 
-        # Restaurar a bottom y visible para dejar limpio
-        win.sync_console_panels("bottom", True)
+        # Restaurar a bottom y oculto por defecto para dejar limpio
+        win.sync_console_panels("bottom", False)
         win.close()
 
     def test_22_concat_anti_stutter(self):
