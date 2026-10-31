@@ -628,6 +628,8 @@ class TabSegment(QWidget):
         self.mark_in_sec = None
         self.mark_out_sec = None
         self._expected_seek_pos_ms = None
+        self._playing_table_row = None
+        self._loaded_media_path = path if (path and os.path.isfile(path)) else ""
         if hasattr(self, "_update_in_out_ui"):
             self._update_in_out_ui()
 
@@ -907,7 +909,7 @@ class TabSegment(QWidget):
         self._update_timecode_display(est_sec)
 
     def _on_timeline_play_normal_requested(self, start_sec: float):
-        input_path = self.input_selector.get_path()
+        input_path = self.input_selector.get_path() or getattr(self, "_loaded_media_path", "")
         if not input_path or not os.path.isfile(input_path):
             self.timeline_widget.set_playing_state(False)
             return
@@ -948,7 +950,7 @@ class TabSegment(QWidget):
             self._update_table_preview_buttons()
 
     def _on_timeline_play_selection_requested(self, start_sec: float, end_sec: float, table_row: Optional[int] = None):
-        input_path = self.input_selector.get_path()
+        input_path = self.input_selector.get_path() or getattr(self, "_loaded_media_path", "")
         if not input_path or not os.path.isfile(input_path):
             self._playing_table_row = None
             self.timeline_widget.set_playing_state(False)
