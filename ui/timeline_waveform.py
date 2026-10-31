@@ -695,18 +695,19 @@ class AudioSegmentSelectorWidget(QWidget):
     stop_requested = pyqtSignal()
     seek_requested = pyqtSignal(float)                  # time in seconds
 
-    def __init__(self, parent=None):
+    def __init__(self, guide_text: Optional[str] = None, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
         # 1. Cabecera explicativa
-        self.lbl_guide = QLabel(
+        default_guide = (
             "✂️ <b>Selector Gráfico de Voz:</b> Arrastra el marcador rojo (triángulo superior) o haz clic en la regla para ubicar la reproducción. "
             "Arrastra con el ratón sobre la onda para marcar tramos de habla y ajusta los bordes. "
             "Usa los botones de Zoom o <b>Ctrl + Rueda</b> para ver la onda con máxima precisión."
         )
+        self.lbl_guide = QLabel(guide_text if guide_text is not None else default_guide)
         self.lbl_guide.setStyleSheet("color: #94a3b8; font-size: 11px;")
         layout.addWidget(self.lbl_guide)
 

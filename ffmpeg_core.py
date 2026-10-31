@@ -595,6 +595,49 @@ def build_extract_frames_command(
     return cmd
 
 
+def build_cut_video_segment_command(
+    ffmpeg_path: str,
+    input_file: str,
+    output_file: str,
+    start_sec: float,
+    end_sec: float,
+    mode: str = "exact"  # "exact" o "copy"
+) -> List[str]:
+    """
+    Construye el comando para extraer un intervalo de tiempo específico [start_sec, end_sec] de un video.
+    - 'exact': Corte con recodificación exacta al milisegundo (-ss ... -to ... -c:v libx264 -crf 17 -c:a aac).
+    - 'copy': Copia directa de streams (-c copy -map 0) sin recodificar.
+    """
+    cmd = [ffmpeg_path, "-y"]
+
+    if mode == "copy":
+        # Copia de streams buscando keyframes cercanos
+        cmd.extend([
+            "-ss", f"{start_sec:.3f}",
+            "-to", f"{end_sec:.3f}",
+            "-i", input_file,
+            "-c", "copy",
+            "-map", "0",
+            output_file
+        ])
+    else:
+        # Corte exacto con máxima fidelidad visual y de audio
+        cmd.extend([
+            "-ss", f"{start_sec:.3f}",
+            "-to", f"{end_sec:.3f}",
+            "-i", input_file,
+            "-c:v", "libx264",
+            "-crf", "17",
+            "-preset", "fast",
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-map", "0",
+            output_file
+        ])
+
+    return cmd
+
+
 def find_sequence_start_number(folder: str, pattern: str) -> Optional[int]:
     """
     Detecta el número inicial de una secuencia de imágenes (ej. frame_%06d.png)

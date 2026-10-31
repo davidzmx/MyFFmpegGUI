@@ -543,6 +543,34 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertEqual(seg_tab.combo_mode.currentData(), "exact")
         self.assertIn("Corte Exacto", seg_tab.combo_mode.currentText())
 
+        # Comprobar controles del Modo Avanzado (Línea de tiempo interactiva)
+        self.assertTrue(seg_tab.radio_mode_auto.isChecked())
+        self.assertFalse(seg_tab.radio_mode_advanced.isChecked())
+        self.assertFalse(seg_tab.panel_auto.isHidden())
+        self.assertTrue(seg_tab.panel_advanced.isHidden())
+
+        seg_tab.radio_mode_advanced.setChecked(True)
+        self.assertTrue(seg_tab.panel_auto.isHidden())
+        self.assertFalse(seg_tab.panel_advanced.isHidden())
+        self.assertEqual(seg_tab.btn_run.text(), "Extraer Segmentos Seleccionados")
+
+        # Asignar segmentos manuales y comprobar comando generado
+        seg_tab.timeline_widget.set_segments([(0.5, 2.0), (3.0, 4.5)])
+        self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 2)
+        cmd_cut_exact = ffmpeg_core.build_cut_video_segment_command(
+            self.ffmpeg_path, self.test_video, "cut_test.mp4", 0.5, 2.0, mode="exact"
+        )
+        self.assertIn("libx264", cmd_cut_exact)
+        self.assertIn("17", cmd_cut_exact)
+        cmd_cut_copy = ffmpeg_core.build_cut_video_segment_command(
+            self.ffmpeg_path, self.test_video, "cut_test.mp4", 0.5, 2.0, mode="copy"
+        )
+        self.assertIn("copy", cmd_cut_copy)
+
+        seg_tab.radio_mode_auto.setChecked(True)
+        self.assertFalse(seg_tab.panel_auto.isHidden())
+        self.assertTrue(seg_tab.panel_advanced.isHidden())
+
         # Comprobar que build_segment_command utiliza 'exact' por defecto
         cmd_default_seg = ffmpeg_core.build_segment_command(
             self.ffmpeg_path, self.test_video, "part_%03d.mp4"
