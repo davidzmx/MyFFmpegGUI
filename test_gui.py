@@ -580,14 +580,13 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertGreater(seg_tab.media_duration, 3.5)
         self.assertFalse(seg_tab.video_widget.isHidden())
 
-        # Probar fijar In y Out
+        # Probar fijar In y Out (creación automática al fijar ambos extremos)
         seg_tab.timeline_widget.set_playhead_pos(1.0)
         seg_tab._on_mark_in_clicked()
         self.assertEqual(seg_tab.mark_in_sec, 1.0)
         seg_tab.timeline_widget.set_playhead_pos(3.0)
         seg_tab._on_mark_out_clicked()
-        self.assertEqual(seg_tab.mark_out_sec, 3.0)
-        seg_tab._on_add_marked_segment_clicked()
+        # Al pulsar Fijar Fin con Inicio ya fijado, se auto-crea el segmento (1.0, 3.0) inmediatamente
         self.assertIn((1.0, 3.0), seg_tab.timeline_widget.get_segments())
         self.assertGreaterEqual(seg_tab.table_segments.rowCount(), 1)
 

@@ -129,6 +129,8 @@ class AudioTimelineCanvas(QWidget):
         self._orig_seg: Optional[Tuple[float, float]] = None
         self._hover_mode: Optional[str] = None
         self._hover_idx: int = -1
+        self.mark_in: Optional[float] = None
+        self.mark_out: Optional[float] = None
 
     def set_media(self, duration: float, waveform_peaks: Optional[np.ndarray] = None):
         """Carga la duración y los picos de forma de onda."""
@@ -162,6 +164,12 @@ class AudioTimelineCanvas(QWidget):
         if self.selected_idx >= 0 and self.selected_idx < len(self.segments):
             st, en = self.segments[self.selected_idx]
             self.segment_selected.emit(self.selected_idx, st, en)
+
+    def set_in_out_markers(self, mark_in: Optional[float], mark_out: Optional[float]):
+        """Fija marcas visuales de punto In y Out en la línea de tiempo."""
+        self.mark_in = mark_in
+        self.mark_out = mark_out
+        self.update()
 
     def set_playhead(self, seconds: float):
         """Actualiza la aguja de reproducción visual."""
@@ -457,7 +465,8 @@ class AudioTimelineCanvas(QWidget):
 
         elif self._drag_mode == 'create' and self._orig_seg:
             st, en = self._orig_seg
-            if en - st >= 0.35:
+            drag_px = abs(x - self._drag_start_x)
+            if (en - st >= 0.15) or (drag_px >= 6 and en - st > 0.05):
                 self.segments.append((round(st, 2), round(en, 2)))
                 self.segments.sort(key=lambda s: s[0])
                 self.selected_idx = self.segments.index((round(st, 2), round(en, 2)))
@@ -468,6 +477,22 @@ class AudioTimelineCanvas(QWidget):
                 self.seek_requested.emit(t)
                 self.set_playhead(t)
             self._orig_seg = None
+
+    def mouseDoubleClickEvent(self, event):
+        """Doble clic en la línea de tiempo: crea un segmento conveniente de 10s rápidamente."""
+        if self.total_duration <= 0 or event.button() != Qt.LeftButton:
+            return
+        t = self._x_to_time(event.pos().x())
+        st = max(0.0, round(t, 2))
+        seg_len = 10.0 if self.total_duration >= 20.0 else max(1.0, self.total_duration / 4.0)
+        en = min(self.total_duration, round(st + seg_len, 2))
+        if en > st + 0.2:
+            self.segments.append((round(st, 2), round(en, 2)))
+            self.segments.sort(key=lambda s: s[0])
+            self.selected_idx = self.segments.index((round(st, 2), round(en, 2)))
+            self.segments_changed.emit(self.segments)
+            self.segment_selected.emit(self.selected_idx, st, en)
+            self.update()
 
         elif self._drag_mode == 'move':
             if abs(x - self._drag_start_x) < 4:
@@ -651,6 +676,46 @@ class AudioTimelineCanvas(QWidget):
             painter.setPen(QPen(QColor("#f59e0b"), 1.5, Qt.DashLine))
             painter.setBrush(Qt.NoBrush)
             painter.drawRect(c_rect)
+
+        # 4.5 Dibujar marcas visuales In / Out si están fijadas
+        if getattr(self, "mark_in", None) is not None and getattr(self, "mark_out", None) is not None:
+            xin1 = self._time_to_x(min(self.mark_in, self.mark_out))
+            xin2 = self._time_to_x(max(self.mark_in, self.mark_out))
+            painter.fillRect(QRectF(xin1, ruler_h + 1.0, max(2.0, xin2 - xin1), wave_h - 2.0), QColor(16, 185, 129, 45))
+
+        if getattr(self, "mark_in", None) is not None:
+            x_in = self._time_to_x(self.mark_in)
+            if -20 <= x_in <= w + 20:
+                painter.setPen(QPen(QColor("#10b981"), 2.0))
+                painter.drawLine(int(x_in), int(ruler_h), int(x_in), int(h))
+                flag_in = QPolygonF([
+                    QPointF(x_in, 2.0),
+                    QPointF(x_in + 14.0, 8.0),
+                    QPointF(x_in, 14.0)
+                ])
+                painter.setPen(QPen(QColor("#065f46"), 1.0))
+                painter.setBrush(QBrush(QColor("#10b981")))
+                painter.drawPolygon(flag_in)
+                painter.setFont(QFont("Consolas", 7, QFont.Bold))
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(int(x_in) + 2, 11, "IN")
+
+        if getattr(self, "mark_out", None) is not None:
+            x_out = self._time_to_x(self.mark_out)
+            if -20 <= x_out <= w + 20:
+                painter.setPen(QPen(QColor("#f59e0b"), 2.0))
+                painter.drawLine(int(x_out), int(ruler_h), int(x_out), int(h))
+                flag_out = QPolygonF([
+                    QPointF(x_out, 2.0),
+                    QPointF(x_out - 14.0, 8.0),
+                    QPointF(x_out, 14.0)
+                ])
+                painter.setPen(QPen(QColor("#92400e"), 1.0))
+                painter.setBrush(QBrush(QColor("#f59e0b")))
+                painter.drawPolygon(flag_out)
+                painter.setFont(QFont("Consolas", 7, QFont.Bold))
+                painter.setPen(QColor("#ffffff"))
+                painter.drawText(int(x_out) - 13, 11, "OUT")
 
         # 5. Aguja de Reproducción (Playhead con marcador triangular arrastrable)
         px = self._time_to_x(self.playhead_pos)
@@ -843,6 +908,10 @@ class AudioSegmentSelectorWidget(QWidget):
 
     def get_segments(self) -> List[Tuple[float, float]]:
         return self.canvas.segments
+
+    def set_in_out_markers(self, mark_in: Optional[float], mark_out: Optional[float]):
+        """Propaga las marcas visuales In / Out al lienzo de la onda."""
+        self.canvas.set_in_out_markers(mark_in, mark_out)
 
     def set_playhead_pos(self, seconds: float):
         self.canvas.set_playhead(seconds)

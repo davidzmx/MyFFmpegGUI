@@ -202,6 +202,7 @@ class TabSegment(QWidget):
         # Marcadores In / Out para fijación manual rápida
         self.mark_in_sec: Optional[float] = None
         self.mark_out_sec: Optional[float] = None
+        self._expected_seek_pos_ms: Optional[int] = None
 
         # Reproductor interno con salida de video para la línea de tiempo interactiva
         self.player = QMediaPlayer(self)
@@ -572,8 +573,9 @@ class TabSegment(QWidget):
 
         self.mark_in_sec = None
         self.mark_out_sec = None
-        if hasattr(self, "lbl_marker_status"):
-            self.lbl_marker_status.setText("In: --:--.-- | Out: --:--.--")
+        self._expected_seek_pos_ms = None
+        if hasattr(self, "_update_in_out_ui"):
+            self._update_in_out_ui()
 
         if not path or not os.path.isfile(path):
             self.lbl_info.setText("Duración: --:--:-- | Resolución: -- x --")
@@ -628,8 +630,18 @@ class TabSegment(QWidget):
         # Cuando el medio esté completamente cargado y con buffer, asegurar que se muestre el primer fotograma
         if status in (QMediaPlayer.LoadedMedia, QMediaPlayer.BufferedMedia):
             if self.player.state() != QMediaPlayer.PlayingState:
-                self.player.setPosition(0)
                 self.player.pause()
+        elif status == QMediaPlayer.EndOfMedia:
+            self._smooth_timer.stop()
+            self._timeline_stop_ms = None
+            self.player.pause()
+            if hasattr(self, "timeline_widget"):
+                self.timeline_widget.set_playing_state(False)
+                self.timeline_widget.set_playhead_pos(self.media_duration)
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Reproducir")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            self._update_timecode_display(self.media_duration)
 
     def _on_use_base_changed(self):
         use_base = self.chk_use_base.isChecked()
@@ -755,6 +767,10 @@ class TabSegment(QWidget):
             self._stop_video_playback()
         else:
             cur_sec = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+            # Si el marcador está al final del video, reiniciar desde 0
+            if self.media_duration > 0 and cur_sec >= self.media_duration - 0.2:
+                cur_sec = 0.0
+                self.timeline_widget.set_playhead_pos(0.0)
             self._on_timeline_play_normal_requested(cur_sec)
 
     def _stop_video_playback(self):
@@ -766,8 +782,9 @@ class TabSegment(QWidget):
         if hasattr(self, "timeline_widget"):
             self.timeline_widget.set_playing_state(False)
             self.timeline_widget.set_playhead_pos(cur_pos_sec)
-        self.btn_vid_play_pause.setText(" Reproducir")
-        self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        if hasattr(self, "btn_vid_play_pause"):
+            self.btn_vid_play_pause.setText(" Reproducir")
+            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
         self.progress_widget.set_status("Reproducción pausada.")
 
     def _step_time(self, delta_sec: float):
@@ -794,8 +811,9 @@ class TabSegment(QWidget):
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
-                self.btn_vid_play_pause.setText(" Reproducir")
-                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                if hasattr(self, "btn_vid_play_pause"):
+                    self.btn_vid_play_pause.setText(" Reproducir")
+                    self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
                 self._update_timecode_display(stop_sec)
                 return
 
@@ -805,8 +823,9 @@ class TabSegment(QWidget):
             self.player.pause()
             self.timeline_widget.set_playhead_pos(self.media_duration)
             self.timeline_widget.set_playing_state(False)
-            self.btn_vid_play_pause.setText(" Reproducir")
-            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Reproducir")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
             self._update_timecode_display(self.media_duration)
             return
 
@@ -820,19 +839,30 @@ class TabSegment(QWidget):
             return
 
         try:
+            # Si el marcador está al final del video, reiniciar desde 0
+            if self.media_duration > 0 and start_sec >= self.media_duration - 0.2:
+                start_sec = 0.0
+
             self._timeline_stop_ms = None
             self._smooth_timer.stop()
-            self.player.setPosition(int(start_sec * 1000))
-            self.player.play()
 
+            target_ms = int(start_sec * 1000)
+            self._expected_seek_pos_ms = target_ms
             self._play_sync_pos = float(start_sec)
             self._play_sync_perf = time.perf_counter()
+
+            if self.player.mediaStatus() == QMediaPlayer.EndOfMedia:
+                self.player.stop()
+
+            self.player.setPosition(target_ms)
+            self.player.play()
             self._smooth_timer.start()
 
             self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="normal")
-            self.btn_vid_play_pause.setText(" Pausar")
-            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Pausar")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
             self.progress_widget.set_status("Reproduciendo video normalmente...")
             self._update_timecode_display(start_sec)
         except Exception:
@@ -848,17 +878,24 @@ class TabSegment(QWidget):
         try:
             self._timeline_stop_ms = int(end_sec * 1000)
             self._smooth_timer.stop()
-            self.player.setPosition(int(start_sec * 1000))
-            self.player.play()
 
+            target_ms = int(start_sec * 1000)
+            self._expected_seek_pos_ms = target_ms
             self._play_sync_pos = float(start_sec)
             self._play_sync_perf = time.perf_counter()
+
+            if self.player.mediaStatus() == QMediaPlayer.EndOfMedia:
+                self.player.stop()
+
+            self.player.setPosition(target_ms)
+            self.player.play()
             self._smooth_timer.start()
 
             self.timeline_widget.set_playhead_pos(start_sec)
             self.timeline_widget.set_playing_state(True, mode="selection")
-            self.btn_vid_play_pause.setText(" Pausar")
-            self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
+            if hasattr(self, "btn_vid_play_pause"):
+                self.btn_vid_play_pause.setText(" Pausar")
+                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPause))
             self.progress_widget.set_status(f"Reproduciendo selección ({end_sec - start_sec:.2f}s)...")
             self._update_timecode_display(start_sec)
         except Exception:
@@ -869,14 +906,24 @@ class TabSegment(QWidget):
         self._stop_video_playback()
 
     def _on_timeline_seek_requested(self, sec: float):
+        self._expected_seek_pos_ms = int(sec * 1000)
         self._play_sync_pos = float(sec)
         self._play_sync_perf = time.perf_counter()
+        if self.player.mediaStatus() == QMediaPlayer.EndOfMedia:
+            self.player.stop()
         self.player.setPosition(int(sec * 1000))
         self._update_timecode_display(sec)
 
     def _on_player_position_changed(self, pos_ms: int):
         if self.player.state() != QMediaPlayer.PlayingState:
             return
+
+        # Descartar eventos de posición obsoletos emitidos por DirectShow antes de aplicar el seek
+        if getattr(self, "_expected_seek_pos_ms", None) is not None:
+            if abs(pos_ms - self._expected_seek_pos_ms) > 1200:
+                return
+            else:
+                self._expected_seek_pos_ms = None
 
         if self.radio_mode_advanced.isChecked():
             real_sec = pos_ms / 1000.0
@@ -891,8 +938,9 @@ class TabSegment(QWidget):
                 self.player.pause()
                 self.timeline_widget.set_playhead_pos(stop_sec)
                 self.timeline_widget.set_playing_state(False)
-                self.btn_vid_play_pause.setText(" Reproducir")
-                self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+                if hasattr(self, "btn_vid_play_pause"):
+                    self.btn_vid_play_pause.setText(" Reproducir")
+                    self.btn_vid_play_pause.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
                 self._update_timecode_display(stop_sec)
 
     def _on_player_state_changed(self, state):
@@ -911,25 +959,101 @@ class TabSegment(QWidget):
     # =========================================================================
     # Marcadores In / Out y Sincronización de Tabla de Segmentos
     # =========================================================================
-    def _on_mark_in_clicked(self):
-        """Fija la posición actual del video como punto In (inicio)."""
-        cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
-        self.mark_in_sec = cur
+    def _add_segment_interval(self, st: float, en: float):
+        """Añade un intervalo de tiempo como segmento válido a la línea de tiempo y tabla."""
+        st = max(0.0, min(self.media_duration, float(st)))
+        en = max(0.0, min(self.media_duration, float(en)))
+        if en < st:
+            st, en = en, st
+
+        if en - st < 0.2:
+            QMessageBox.information(
+                self, "Segmento Demasiado Corto",
+                "El segmento a marcar debe tener una duración de al menos 0.20 segundos."
+            )
+            return
+
+        cur_segs = list(self.timeline_widget.get_segments())
+        new_seg = (round(st, 2), round(en, 2))
+        if new_seg not in cur_segs:
+            cur_segs.append(new_seg)
+            cur_segs.sort(key=lambda s: s[0])
+            self.timeline_widget.set_segments(cur_segs)
+            self._sync_segments_table(cur_segs)
+            self._update_estimate()
+            self._update_command_preview()
+
+    def _update_in_out_ui(self):
+        """Actualiza el texto y apariencia de los botones In/Out y dibuja marcas en el lienzo."""
+        if hasattr(self, "timeline_widget"):
+            self.timeline_widget.set_in_out_markers(self.mark_in_sec, self.mark_out_sec)
+
+        in_str = format_seconds_exact(self.mark_in_sec) if self.mark_in_sec is not None else "--:--.--"
         out_str = format_seconds_exact(self.mark_out_sec) if self.mark_out_sec is not None else "--:--.--"
-        self.lbl_marker_status.setText(f"In: {format_seconds_exact(cur)} | Out: {out_str}")
-        self.progress_widget.set_status(f"Punto de inicio fijado en {format_seconds_exact(cur)}")
+
+        if hasattr(self, "lbl_marker_status"):
+            self.lbl_marker_status.setText(f"In: {in_str} | Out: {out_str}")
+
+        if hasattr(self, "btn_mark_in"):
+            if self.mark_in_sec is not None:
+                self.btn_mark_in.setText(f" 🚩 Inicio: {in_str}")
+                self.btn_mark_in.setStyleSheet("padding: 4px 8px; font-weight: bold; background-color: #059669; color: white;")
+            else:
+                self.btn_mark_in.setText(" 🚩 Fijar Inicio (In)")
+                self.btn_mark_in.setStyleSheet("padding: 4px 8px;")
+
+        if hasattr(self, "btn_mark_out"):
+            if self.mark_out_sec is not None:
+                self.btn_mark_out.setText(f" 🏁 Fin: {out_str}")
+                self.btn_mark_out.setStyleSheet("padding: 4px 8px; font-weight: bold; background-color: #d97706; color: white;")
+            else:
+                self.btn_mark_out.setText(" 🏁 Fijar Fin (Out)")
+                self.btn_mark_out.setStyleSheet("padding: 4px 8px;")
+
+    def _on_mark_in_clicked(self):
+        """Fija la posición actual como punto In (inicio). Si ya hay un punto Out posterior, auto-crea el segmento."""
+        cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        cur = round(cur, 2)
+
+        # Si ya se había fijado un punto Out posterior a este cursor, auto-crear segmento inmediatamente
+        if self.mark_out_sec is not None and self.mark_out_sec > cur + 0.15:
+            st = cur
+            en = self.mark_out_sec
+            self._add_segment_interval(st, en)
+            self.mark_in_sec = None
+            self.mark_out_sec = None
+            self._update_in_out_ui()
+            self.progress_widget.set_status(f"¡Segmento marcado exitosamente: {format_seconds_exact(st)} a {format_seconds_exact(en)}!")
+            return
+
+        self.mark_in_sec = cur
+        self._update_in_out_ui()
+        self.progress_widget.set_status(f"🚩 Punto de inicio fijado en {format_seconds_exact(cur)}. Ubica el final y pulsa '🏁 Fijar Fin'.")
 
     def _on_mark_out_clicked(self):
-        """Fija la posición actual del video como punto Out (fin)."""
+        """Fija la posición actual como punto Out (fin). Si ya hay un punto In anterior, auto-crea el segmento."""
         cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        cur = round(cur, 2)
+
+        # Si ya se había fijado un punto In anterior a este cursor, auto-crear segmento inmediatamente
+        if self.mark_in_sec is not None and cur > self.mark_in_sec + 0.15:
+            st = self.mark_in_sec
+            en = cur
+            self._add_segment_interval(st, en)
+            self.mark_in_sec = None
+            self.mark_out_sec = None
+            self._update_in_out_ui()
+            self.progress_widget.set_status(f"¡Segmento marcado exitosamente: {format_seconds_exact(st)} a {format_seconds_exact(en)}!")
+            return
+
         self.mark_out_sec = cur
-        in_str = format_seconds_exact(self.mark_in_sec) if self.mark_in_sec is not None else "--:--.--"
-        self.lbl_marker_status.setText(f"In: {in_str} | Out: {format_seconds_exact(cur)}")
-        self.progress_widget.set_status(f"Punto final fijado en {format_seconds_exact(cur)}")
+        self._update_in_out_ui()
+        self.progress_widget.set_status(f"🏁 Punto final fijado en {format_seconds_exact(cur)}. Ubica el inicio y pulsa '🚩 Fijar Inicio'.")
 
     def _on_add_marked_segment_clicked(self):
-        """Añade un segmento delimitado por In y Out, o basado en el cursor actual."""
+        """Añade un segmento delimitado por In y Out, o crea uno desde la posición del cursor."""
         cur = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+        cur = round(cur, 2)
 
         if self.mark_in_sec is not None and self.mark_out_sec is not None:
             st = min(self.mark_in_sec, self.mark_out_sec)
@@ -941,30 +1065,18 @@ class TabSegment(QWidget):
             en = self.mark_out_sec
             st = cur if cur < en - 0.2 else max(0.0, en - 10.0)
         else:
-            # Añadir un segmento por defecto de 10s desde el cursor actual
+            # Segmento conveniente de 10s desde el cursor actual
             st = cur
-            en = min(self.media_duration, cur + 10.0) if self.media_duration > cur + 0.5 else max(0.0, cur - 10.0)
+            seg_len = 10.0 if self.media_duration >= 20.0 else max(1.0, self.media_duration / 4.0)
+            en = min(self.media_duration, cur + seg_len) if self.media_duration > cur + 0.5 else max(0.0, cur - seg_len)
             if en < st:
                 st, en = en, st
 
-        if en - st < 0.2:
-            QMessageBox.information(
-                self, "Segmento Demasiado Corto",
-                "El segmento a marcar debe tener una duración de al menos 0.20 segundos."
-            )
-            return
-
-        cur_segs = list(self.timeline_widget.get_segments())
-        cur_segs.append((round(st, 2), round(en, 2)))
-        self.timeline_widget.set_segments(cur_segs)
-        self._sync_segments_table(self.timeline_widget.get_segments())
-        self._update_estimate()
-        self._update_command_preview()
-
+        self._add_segment_interval(st, en)
         self.mark_in_sec = None
         self.mark_out_sec = None
-        self.lbl_marker_status.setText("In: --:--.-- | Out: --:--.--")
-        self.progress_widget.set_status(f"Segmento #{len(cur_segs)} agregado: {format_seconds_exact(st)} a {format_seconds_exact(en)}")
+        self._update_in_out_ui()
+        self.progress_widget.set_status(f"Segmento agregado: {format_seconds_exact(st)} a {format_seconds_exact(en)}")
 
     def _sync_segments_table(self, segs: Optional[List[Tuple[float, float]]] = None):
         """Sincroniza la tabla de visualización con los segmentos de la línea de tiempo."""
