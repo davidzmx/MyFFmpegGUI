@@ -208,6 +208,7 @@ class TabSegment(QWidget):
         self.player = QMediaPlayer(self)
         self.player.stateChanged.connect(self._on_player_state_changed)
         self.player.positionChanged.connect(self._on_player_position_changed)
+        self.player.durationChanged.connect(self._on_player_duration_changed)
         self.player.mediaStatusChanged.connect(self._on_player_media_status_changed)
         self._timeline_stop_ms: Optional[int] = None
 
@@ -625,6 +626,18 @@ class TabSegment(QWidget):
         self._update_timecode_display(0.0)
         self._update_folder_suggestion()
         self._update_estimate()
+
+    def _on_player_duration_changed(self, dur_ms: int):
+        if dur_ms > 0:
+            player_dur = dur_ms / 1000.0
+            if self.media_duration <= 0.1:
+                self.media_duration = player_dur
+                if hasattr(self, "timeline_widget"):
+                    self.timeline_widget.canvas.total_duration = max(0.1, player_dur)
+                    self.timeline_widget.canvas.update()
+                cur_pos = self.timeline_widget.canvas.playhead_pos if hasattr(self, "timeline_widget") else 0.0
+                self._update_timecode_display(cur_pos)
+                self._update_estimate()
 
     def _on_player_media_status_changed(self, status):
         # Cuando el medio esté completamente cargado y con buffer, asegurar que se muestre el primer fotograma

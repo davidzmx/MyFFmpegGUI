@@ -590,6 +590,27 @@ class TestFFmpegSuite(unittest.TestCase):
         self.assertIn((1.0, 3.0), seg_tab.timeline_widget.get_segments())
         self.assertGreaterEqual(seg_tab.table_segments.rowCount(), 1)
 
+        # Probar selección gráfica directa arrastrando con el ratón sobre la onda de tiempo
+        seg_tab._clear_all_segments()
+        self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 0)
+        canvas = seg_tab.timeline_widget.canvas
+        canvas.resize(400, 130)
+        from PyQt5.QtGui import QMouseEvent
+        from PyQt5.QtCore import Qt, QPointF
+        x_start = canvas._time_to_x(0.5)
+        x_end = canvas._time_to_x(2.5)
+        ev_press = QMouseEvent(QMouseEvent.MouseButtonPress, QPointF(x_start, 70.0), Qt.LeftButton, Qt.LeftButton, Qt.NoModifier)
+        canvas.mousePressEvent(ev_press)
+        self.assertEqual(canvas._drag_mode, 'create')
+        ev_move = QMouseEvent(QMouseEvent.MouseMove, QPointF(x_end, 70.0), Qt.NoButton, Qt.LeftButton, Qt.NoModifier)
+        canvas.mouseMoveEvent(ev_move)
+        ev_rel = QMouseEvent(QMouseEvent.MouseButtonRelease, QPointF(x_end, 70.0), Qt.LeftButton, Qt.NoButton, Qt.NoModifier)
+        canvas.mouseReleaseEvent(ev_rel)
+        self.assertIsNone(canvas._drag_mode)
+        self.assertIsNone(canvas._orig_seg)
+        self.assertEqual(len(seg_tab.timeline_widget.get_segments()), 1)
+        self.assertEqual(seg_tab.table_segments.rowCount(), 1)
+
         cmd_cut_exact = ffmpeg_core.build_cut_video_segment_command(
             self.ffmpeg_path, self.test_video, "cut_test.mp4", 0.5, 2.0, mode="exact"
         )

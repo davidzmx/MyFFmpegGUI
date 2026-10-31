@@ -300,6 +300,7 @@ class AudioTimelineCanvas(QWidget):
     def mousePressEvent(self, event):
         if self.total_duration <= 0 or event.button() != Qt.LeftButton:
             return
+        event.accept()
 
         x = event.pos().x()
         y = event.pos().y()
@@ -360,6 +361,7 @@ class AudioTimelineCanvas(QWidget):
             self.update()
 
     def mouseMoveEvent(self, event):
+        event.accept()
         x = event.pos().x()
         y = event.pos().y()
         t = self._x_to_time(x)
@@ -454,45 +456,36 @@ class AudioTimelineCanvas(QWidget):
             self.segment_selected.emit(self.selected_idx, new_st, new_en)
 
     def mouseReleaseEvent(self, event):
+        event.accept()
         x = event.pos().x()
         t = self._x_to_time(x)
 
         if self._drag_mode == 'playhead':
             self.seek_requested.emit(self.playhead_pos)
             self._drag_mode = None
+            self._orig_seg = None
             self.update()
             return
 
-        elif self._drag_mode == 'create' and self._orig_seg:
+        elif self._drag_mode == 'create' and self._orig_seg is not None:
             st, en = self._orig_seg
             drag_px = abs(x - self._drag_start_x)
-            if (en - st >= 0.15) or (drag_px >= 6 and en - st > 0.05):
-                self.segments.append((round(st, 2), round(en, 2)))
-                self.segments.sort(key=lambda s: s[0])
-                self.selected_idx = self.segments.index((round(st, 2), round(en, 2)))
-                self.segments_changed.emit(self.segments)
-                self.segment_selected.emit(self.selected_idx, st, en)
+            if (en - st >= 0.15) or (drag_px >= 5 and en > st):
+                st_r = round(st, 2)
+                en_r = round(max(en, min(self.total_duration, st + 0.1)), 2)
+                if en_r > st_r:
+                    new_seg = (st_r, en_r)
+                    if new_seg not in self.segments:
+                        self.segments.append(new_seg)
+                        self.segments.sort(key=lambda s: s[0])
+                    self.selected_idx = self.segments.index(new_seg)
+                    self.segments_changed.emit(self.segments)
+                    self.segment_selected.emit(self.selected_idx, st_r, en_r)
             else:
                 # Clic simple sin arrastre sobre la onda: mover la aguja roja a este punto
                 self.seek_requested.emit(t)
                 self.set_playhead(t)
             self._orig_seg = None
-
-    def mouseDoubleClickEvent(self, event):
-        """Doble clic en la línea de tiempo: crea un segmento conveniente de 10s rápidamente."""
-        if self.total_duration <= 0 or event.button() != Qt.LeftButton:
-            return
-        t = self._x_to_time(event.pos().x())
-        st = max(0.0, round(t, 2))
-        seg_len = 10.0 if self.total_duration >= 20.0 else max(1.0, self.total_duration / 4.0)
-        en = min(self.total_duration, round(st + seg_len, 2))
-        if en > st + 0.2:
-            self.segments.append((round(st, 2), round(en, 2)))
-            self.segments.sort(key=lambda s: s[0])
-            self.selected_idx = self.segments.index((round(st, 2), round(en, 2)))
-            self.segments_changed.emit(self.segments)
-            self.segment_selected.emit(self.selected_idx, st, en)
-            self.update()
 
         elif self._drag_mode == 'move':
             if abs(x - self._drag_start_x) < 4:
@@ -508,6 +501,27 @@ class AudioTimelineCanvas(QWidget):
         self._drag_mode = None
         self._orig_seg = None
         self.update()
+
+    def mouseDoubleClickEvent(self, event):
+        """Doble clic en la línea de tiempo: crea un segmento conveniente de 10s rápidamente."""
+        if self.total_duration <= 0 or event.button() != Qt.LeftButton:
+            return
+        if event.pos().y() <= 24:
+            return
+        event.accept()
+        t = self._x_to_time(event.pos().x())
+        st = max(0.0, round(t, 2))
+        seg_len = 10.0 if self.total_duration >= 20.0 else max(1.0, self.total_duration / 4.0)
+        en = min(self.total_duration, round(st + seg_len, 2))
+        if en > st + 0.2:
+            new_seg = (round(st, 2), round(en, 2))
+            if new_seg not in self.segments:
+                self.segments.append(new_seg)
+                self.segments.sort(key=lambda s: s[0])
+            self.selected_idx = self.segments.index(new_seg)
+            self.segments_changed.emit(self.segments)
+            self.segment_selected.emit(self.selected_idx, st, en)
+            self.update()
 
     def leaveEvent(self, event):
         if self._hover_mode:

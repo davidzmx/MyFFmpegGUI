@@ -188,19 +188,34 @@ def get_media_info(filepath: str, ffprobe_path: Optional[str] = None) -> Dict[st
         info["raw"] = data
 
         format_info = data.get("format", {})
-        dur = float(format_info.get("duration", 0.0))
-        info["duration"] = dur
-        info["size_bytes"] = int(format_info.get("size", 0))
+        try:
+            dur = float(format_info.get("duration", 0.0))
+        except (ValueError, TypeError):
+            dur = 0.0
+        try:
+            info["size_bytes"] = int(format_info.get("size", 0))
+        except (ValueError, TypeError):
+            info["size_bytes"] = 0
         info["format_name"] = format_info.get("format_name", "")
-
-        # Formato de tiempo HH:MM:SS
-        hours = int(dur // 3600)
-        minutes = int((dur % 3600) // 60)
-        seconds = int(dur % 60)
-        info["duration_str"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
         streams = data.get("streams", [])
         for st in streams:
+            if dur <= 0.0:
+                try:
+                    st_dur = float(st.get("duration", 0.0))
+                    if st_dur > dur:
+                        dur = st_dur
+                except (ValueError, TypeError):
+                    pass
+                if dur <= 0.0:
+                    tags = st.get("tags", {}) or {}
+                    tag_dur = tags.get("DURATION") or tags.get("duration") or ""
+                    if tag_dur and ":" in str(tag_dur):
+                        try:
+                            parts = str(tag_dur).split(":")
+                            dur = float(parts[0]) * 3600.0 + float(parts[1]) * 60.0 + float(parts[2])
+                        except Exception:
+                            pass
             codec_type = st.get("codec_type")
             if codec_type == "video":
                 info["video_streams"].append(st)
@@ -225,6 +240,13 @@ def get_media_info(filepath: str, ffprobe_path: Optional[str] = None) -> Dict[st
                 info["audio_streams"].append(st)
                 if not info["audio_codec"]:
                     info["audio_codec"] = st.get("codec_name", "")
+
+        info["duration"] = dur
+        # Formato de tiempo HH:MM:SS
+        hours = int(dur // 3600)
+        minutes = int((dur % 3600) // 60)
+        seconds = int(dur % 60)
+        info["duration_str"] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     except Exception:
         pass
