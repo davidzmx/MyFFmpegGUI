@@ -29,6 +29,8 @@ echo "[*] Copiando archivos de la aplicacion..."
 cp "$PROJECT_DIR/main.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/ffmpeg_core.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/ffmpeg_worker.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
+cp "$PROJECT_DIR/diarization_core.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
+cp "$PROJECT_DIR/voice_worker.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/config_manager.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp "$PROJECT_DIR/context_menu_manager.py" "$PKG_DIR/usr/share/myffmpeg-gui/"
 cp -r "$PROJECT_DIR/ui" "$PKG_DIR/usr/share/myffmpeg-gui/"
@@ -71,7 +73,7 @@ Version: $APP_VERSION
 Section: video
 Priority: optional
 Architecture: $ARCH
-Depends: python3 (>= 3.8), python3-pyqt5, ffmpeg
+Depends: python3 (>= 3.8), python3-pyqt5, python3-pyqt5.qtmultimedia, python3-numpy, python3-scipy, ffmpeg
 Maintainer: MyTests <soporte@mytests.local>
 Description: Suite de procesamiento multimedia sin perdida basada en FFmpeg
  Interfaz grafica moderna y elegante para conversion sin perdida,

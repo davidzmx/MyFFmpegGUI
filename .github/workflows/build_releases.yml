@@ -54,6 +54,8 @@ jobs:
                       --hidden-import "PyQt5.QtCore" `
                       --hidden-import "PyQt5.QtWidgets" `
                       --hidden-import "PyQt5.QtGui" `
+                      --hidden-import "PyQt5.QtMultimedia" `
+                      --hidden-import "PyQt5.QtMultimediaWidgets" `
                       main.py
 
       - name: Descargar e integrar FFmpeg y FFprobe oficiales para Windows
