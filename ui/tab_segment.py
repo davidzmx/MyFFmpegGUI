@@ -343,8 +343,8 @@ class TabSegment(QWidget):
         self.lbl_video_placeholder.setStyleSheet("color: #64748b; font-size: 13px; font-weight: 500;")
         layout_vid_box.addWidget(self.lbl_video_placeholder)
 
-        # Conectar salida de video de QMediaPlayer a QVideoWidget
-        self.player.setVideoOutput(self.video_widget)
+        # Conectar salida de video de QMediaPlayer a QVideoWidget bajo demanda al cargar un archivo válido
+        self._video_output_attached = False
 
         layout_preview.addWidget(self.video_container)
 
@@ -661,17 +661,24 @@ class TabSegment(QWidget):
         p = Path(path)
         self.edit_pattern.setText(f"{p.stem}_part_%03d{p.suffix}")
 
-        # Mostrar visor de video y cargar medio en QMediaPlayer
+        # Mostrar visor de video y cargar medio en QMediaPlayer solo si el archivo tiene contenido multimedia válido
         if hasattr(self, "video_widget"):
             self.video_widget.setVisible(True)
         if hasattr(self, "lbl_video_placeholder"):
             self.lbl_video_placeholder.setVisible(False)
 
-        content = QMediaContent(QUrl.fromLocalFile(os.path.abspath(path)))
-        self.player.setMedia(content)
-        # Breve pausa para forzar al decodificador a renderizar el primer fotograma en QVideoWidget
-        self.player.pause()
-        self.player.setPosition(0)
+        if self.media_duration > 0 or os.path.getsize(path) > 128:
+            if not getattr(self, "_video_output_attached", False) and hasattr(self, "video_widget"):
+                try:
+                    self.player.setVideoOutput(self.video_widget)
+                    self._video_output_attached = True
+                except Exception:
+                    pass
+            content = QMediaContent(QUrl.fromLocalFile(os.path.abspath(path)))
+            self.player.setMedia(content)
+            # Breve pausa para forzar al decodificador a renderizar el primer fotograma en QVideoWidget
+            self.player.pause()
+            self.player.setPosition(0)
 
         # Cargar onda en el selector de línea de tiempo interactiva
         if hasattr(self, "timeline_widget") and ffmpeg_path:
@@ -1411,8 +1418,15 @@ class TabSegment(QWidget):
             try:
                 self.player.stop()
                 self.player.setMedia(QMediaContent())
+                if getattr(self, "_video_output_attached", False):
+                    self.player.setVideoOutput(None)
+                    self._video_output_attached = False
             except Exception:
                 pass
+
+    def closeEvent(self, event):
+        self.cleanup_media()
+        super().closeEvent(event)
 
     def _on_finished(self, success: bool, message: str, out_path: str):
         self.btn_run.setEnabled(True)

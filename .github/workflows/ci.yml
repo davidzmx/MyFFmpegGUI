@@ -34,4 +34,4 @@ jobs:
 
       - name: Run automated test suite with Xvfb
         run: |
-          xvfb-run -a python -m unittest test_gui.py
+          xvfb-run -a python test_gui.py

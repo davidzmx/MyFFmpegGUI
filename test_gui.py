@@ -61,6 +61,16 @@ class TestFFmpegSuite(unittest.TestCase):
 
     def tearDown(self):
         try:
+            if hasattr(self, "app") and self.app:
+                for w in list(self.app.topLevelWidgets()):
+                    try:
+                        w.close()
+                    except Exception:
+                        pass
+                self.app.processEvents()
+        except Exception:
+            pass
+        try:
             self.tmp_dir.cleanup()
         except Exception:
             import time
@@ -69,6 +79,21 @@ class TestFFmpegSuite(unittest.TestCase):
                 self.tmp_dir.cleanup()
             except Exception:
                 pass
+
+    @classmethod
+    def tearDownClass(cls):
+        import gc
+        try:
+            if hasattr(cls, "app") and cls.app:
+                for w in list(cls.app.topLevelWidgets()):
+                    try:
+                        w.close()
+                    except Exception:
+                        pass
+                cls.app.processEvents()
+            gc.collect()
+        except Exception:
+            pass
 
     def test_01_paths_and_version(self):
         self.assertTrue(self.ffmpeg_path and os.path.isfile(self.ffmpeg_path))
@@ -1757,7 +1782,21 @@ class TestFFmpegSuite(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    runner = unittest.main(exit=False)
+    try:
+        app = QApplication.instance()
+        if app:
+            for w in list(app.topLevelWidgets()):
+                try:
+                    w.close()
+                except Exception:
+                    pass
+            app.processEvents()
+    except Exception:
+        pass
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(0 if runner.result.wasSuccessful() else 1)
 
 
 
