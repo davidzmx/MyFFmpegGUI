@@ -964,9 +964,8 @@ class TabSegment(QWidget):
                 if target_pair in segs:
                     table_row = segs.index(target_pair)
 
-            self._playing_table_row = table_row
-            self._timeline_stop_ms = int(end_sec * 1000)
             self._smooth_timer.stop()
+            self._timeline_stop_ms = int(end_sec * 1000)
 
             target_ms = int(start_sec * 1000)
             self._expected_seek_pos_ms = target_ms
@@ -978,6 +977,9 @@ class TabSegment(QWidget):
 
             self.player.setPosition(target_ms)
             self.player.play()
+
+            # Asignar fila activa y arrancar temporizador después de play() por si GStreamer emite stateChanged síncrono
+            self._playing_table_row = table_row
             self._smooth_timer.start()
 
             self.timeline_widget.set_playhead_pos(start_sec)
